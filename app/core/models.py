@@ -59,13 +59,13 @@ class Freelancer(User):
         return self.first_name +' '+self.last_name
     
 class Client(User):
-    company_name = models.CharField(max_length=255, blank=True)
-    contact_person = models.CharField(max_length=255, blank=True)
+    company_name = models.CharField(max_length=255, blank=True )
     projects_posted = models.PositiveIntegerField(default=0)
     average_project_budget = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     preferred_freelancers = models.JSONField(default=list, blank=True)
     verified = models.BooleanField(default=False ,blank=True)
     reviews = models.JSONField(default=list, blank=True)
+    REQUIRED_FIELDS = ['company_name'] 
     def __str__(self):
         return self.company_name
 
