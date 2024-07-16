@@ -1,25 +1,19 @@
-'''
-serializers for the user api
-'''
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from django.contrib.auth import authenticate
 from rest_framework import serializers
-from django.utils.translation import gettext_lazy as _
 from core import models
-from rest_framework_simplejwt.tokens import RefreshToken
 
 
 class FreelancerSerializer(serializers.ModelSerializer):
-    """serializer for the model object"""
-    token = serializers.SerializerMethodField()
-
+    """Serializer for the Freelancer model object"""
+    
     class Meta:
         model = models.Freelancer
-        fields = ['email', 'password', 'first_name', 'last_name', 'token']
+        fields = ['id','email', 'password', 'first_name', 'last_name' ,'bio','skills','portfolio','experience','certifications','phone_number','social_links','hourly_rate','availability_status',
+                  'preferred_working_hours','preferred_communication_channels','average_rating','reviews','languages_spoken','selected_payment_method','verified','address','account_status','profile_picture']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
-
+        read_only_fields =['id']
     def create(self, validated_data):
-        """create and return a freelancer with encrypted password"""
+        """Create and return a freelancer with encrypted password"""
         password = validated_data.pop('password', None)
         instance = self.Meta.model(**validated_data)
         if password is not None:
@@ -28,7 +22,7 @@ class FreelancerSerializer(serializers.ModelSerializer):
         return instance
 
     def update(self, instance, validated_data):
-        """Update and return a freelancer."""
+        """Update and return a freelancer"""
         password = validated_data.pop('password', None)
         freelancer = super().update(instance, validated_data)
 
@@ -38,24 +32,17 @@ class FreelancerSerializer(serializers.ModelSerializer):
 
         return freelancer
 
-    def get_token(self, obj):
-        refresh = RefreshToken.for_user(obj)
-        return {
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }
 
 class ClientSerializer(serializers.ModelSerializer):
-    """serializer for the model object"""
-    token = serializers.SerializerMethodField()
-
+    """Serializer for the Client model object"""
+    
     class Meta:
         model = models.Client
-        fields = ['email', 'password', 'company_name', 'token']
+        fields = ['id','email', 'password', 'company_name' ,'projects_posted','average_project_budget','verified','reviews','address','account_status','profile_picture']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
-
+        read_only_fields =['id']
     def create(self, validated_data):
-        """create and return a client with encrypted password"""
+        """Create and return a client with encrypted password"""
         password = validated_data.pop('password', None)
         instance = self.Meta.model(**validated_data)
         if password is not None:
@@ -64,7 +51,7 @@ class ClientSerializer(serializers.ModelSerializer):
         return instance
 
     def update(self, instance, validated_data):
-        """Update and return a client."""
+        """Update and return a client"""
         password = validated_data.pop('password', None)
         client = super().update(instance, validated_data)
 
@@ -74,12 +61,6 @@ class ClientSerializer(serializers.ModelSerializer):
 
         return client
 
-    def get_token(self, obj):
-        refresh = RefreshToken.for_user(obj)
-        return {
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-        }
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Custom serializer for obtaining JWT tokens"""

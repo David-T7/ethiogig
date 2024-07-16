@@ -18,7 +18,7 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser , PermissionsMixin):
     email = models.EmailField(unique=True)
-    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True)
+    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True , null=True)
     address = models.CharField(max_length=255, blank=True)
     account_status = models.CharField(max_length=20, default='Active')
     date_joined = models.DateTimeField(auto_now_add=True)
@@ -52,7 +52,7 @@ class Freelancer(User):
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, blank=True, null=True)
     reviews = models.JSONField(default=list, blank=True)
     languages_spoken = models.JSONField(default=list, blank=True)
-    selected_payment_method = models.ManyToManyField('PaymentMethod', blank=True)
+    selected_payment_method = models.JSONField(default=list, blank=True)
     verified = models.BooleanField(default=False ,blank=True)
     REQUIRED_FIELDS = ['first_name','last_name']
     def __str__(self):
@@ -71,8 +71,33 @@ class Client(User):
 
 class PaymentMethod(models.Model):
     method_name = models.CharField(max_length=50, unique=True)
-    details = models.JSONField(default=dict, blank=True)  # Store payment details like bank account or PayPal info
+    details = models.JSONField(default=list, blank=True)  # Store payment details like bank account or PayPal info
     def __str__(self):
         return self.method_name
     
 
+class Project(models.Model):
+    client = models.ForeignKey(
+        'Client',
+        on_delete=models.SET_NULL,
+        null=True,
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    budget = models.DecimalField(max_digits=10, decimal_places=2 , blank=True , null=True)
+    deadline = models.DateTimeField(null=True , blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('open', 'Open'),
+            ('in_progress', 'In Progress'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled'),
+        ],
+        default='open'
+    )
+
+    def __str__(self):
+        return self.title

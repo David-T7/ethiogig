@@ -10,4 +10,8 @@ urlpatterns = [
     path('token/obtain/', views.CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('freelancer/', views.ManageFreelancerView.as_view(), name="getFreelancer"),
     path('client/', views.ManageClientView.as_view(), name="getClient"),
+    path('projects/', views.ManageProjectListView.as_view(), name="getProjects"),
+    path('projects/<int:pk>/', views.ManageProjectDetailView.as_view(), name='project-detail'),
+    path('clients/', views.ManageClientListView.as_view(), name="getClients"),
+    path('clients/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),
 ]

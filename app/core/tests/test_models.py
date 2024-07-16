@@ -48,4 +48,39 @@ class ModelTest(TestCase):
             company_name = "Ebs"
         )
         self.assertEqual(client.company_name , str(client))
+    def test_Create_Project(self):
+        client = models.Client.objects.create(
+            email = "testuser@gmail.com",
+            password = "test123",
+            company_name = "Ebs"
+        )
+        project = models.Project.objects.create(
+            client = client,
+            title = "Web Developer",
+            description ="We want a react developer"
+        )
+        self.assertEqual(project.title , str(project))
+        self.assertEqual(project.client, client)
+        self.assertEqual(project.status, 'open')
+    def test_project_exists_after_client_deleted(self):
+        client = models.Client.objects.create(
+            email="testuser@gmail.com",
+            password="test123",
+            company_name="Ebs"
+        )
+        project = models.Project.objects.create(
+            client=client,
+            title="Web Developer",
+            description="We want a react developer"
+        )
+        client.delete()  # Actually delete the client from the database
+
+        # Re-fetch the project from the database to get the updated state
+        project.refresh_from_db()
+
+        self.assertEqual(project.title, str(project))
+        self.assertIsNone(project.client)  # Check if the client is set to None
+        self.assertEqual(project.status, 'open')
+
+
     
