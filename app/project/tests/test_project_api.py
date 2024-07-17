@@ -67,3 +67,9 @@ class PrivateApiTests(TestCase):
         res = self.client.put(reverse('project:project-detail', kwargs={'pk': project.pk}), payload, format='json')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data['title'], 'project 2')
+    def test_delete_project(self):
+        """Test deleting a project"""
+        project = self.create_project("project 1")
+        res = self.client.delete(reverse('project:project-detail', kwargs={'pk': project.pk}))
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(models.Project.objects.contains(project))

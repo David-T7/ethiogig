@@ -1,5 +1,7 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager ,PermissionsMixin
 from django.db import models
+from django.core.exceptions import ValidationError
+
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -101,3 +103,69 @@ class Project(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class Contract(models.Model):
+    client = models.ForeignKey(
+        'Client',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='contracts'
+    )
+    freelancer = models.ForeignKey(
+        'Freelancer',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='contracts'
+    )
+    project = models.ForeignKey(
+        'Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='contracts'
+    )
+    terms = models.TextField(null=True, blank=True)
+    start_date = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateTimeField(null=True, blank=True)
+    amount_agreed = models.DecimalField(max_digits=10, decimal_places=2 , blank=True , null=True)
+    payment_terms = models.TextField(null=True, blank=True)
+    freelancer_accepted_terms = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('draft', 'Draft'),
+            ('pending', 'Pending'),
+            ('active', 'Active'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled'),
+        ],
+        default='draft'
+    )
+    payment_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('not_started', 'Not Started'),
+            ('in_progress', 'In Progress'),
+            ('fully_paid', 'Fully Paid'),
+            ('partially_paid', 'Partially Paid'),
+            ('failed', 'Failed'),
+        ],
+        default='not_started'
+    )
+    
+    def __str__(self):
+        return f"Contract for {self.project.title} between {self.client.company_name} and {self.freelancer.first_name} {self.freelancer.last_name}"
+
+    def save(self, *args, **kwargs):
+        if  self.freelancer_accepted_terms:
+            self.status = 'active'
+        elif not self.freelancer_accepted_terms:
+            self.status = 'pending'
+        super().save(*args, **kwargs)
+    def clean(self):
+        super().clean()
+        if self.start_date and self.end_date:
+            if self.start_date >= self.end_date:
+                raise ValidationError({'end_date': 'End date must be after start date.'})

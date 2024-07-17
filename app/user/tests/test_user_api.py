@@ -5,11 +5,12 @@ from core import models
 from rest_framework.test import APIClient
 from rest_framework import status
 
-CREATE_FREELANCER_URL = reverse('user:createFreelancer')
-CREATE_CLIENT_URL = reverse('user:createClient')
-GET_FREELANCER_URL = reverse('user:getFreelancer')
-GET_CLINET_URL = reverse('user:getClient')
-
+CREATE_FREELANCER_URL = reverse('user:create-freelancer')
+CREATE_CLIENT_URL = reverse('user:create-client')
+GET_FREELANCER_URL = reverse('user:manage-freelancer')
+GET_CLINET_URL = reverse('user:manage-client')
+REMOVE_CLIENT_URL = reverse('user:remove-client')
+REMOVE_FREELANCER_URL =  reverse('user:remove-freelancer')
 class PublicApiTests(TestCase):
     # test the public features of the api
     def setUp(self):
@@ -93,6 +94,11 @@ class PrivateFreelancerApiTests(TestCase):
         self.assertEqual(self.user.first_name, payload['first_name'])
         self.assertTrue(self.user.check_password(payload['password']))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+    def test_delete_user_profile(self):
+        """Test deleting the user profile for the authenticated freelancer."""
+        res = self.client.delete(REMOVE_FREELANCER_URL)
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(models.Client.objects.contains(self.user))
 
 
 class PrivateClientApiTests(TestCase):
@@ -126,3 +132,8 @@ class PrivateClientApiTests(TestCase):
         self.assertEqual(self.user.company_name, payload['company_name'])
         self.assertTrue(self.user.check_password(payload['password']))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+    def test_delete_user_profile(self):
+        """Test deleting the user profile for the authenticated client."""
+        res = self.client.delete(REMOVE_CLIENT_URL)
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(models.Client.objects.contains(self.user))

@@ -18,7 +18,6 @@ def get_tokens_for_user(user):
         'access': str(refresh.access_token),
     }
 
-
 class CreateFreelancerView(generics.CreateAPIView):
     """Create a new freelancer in the system"""
     serializer_class = FreelancerSerializer
@@ -57,7 +56,7 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        """Retrieve and return the authenticated freelancer user"""
+        """Retrieve and return the authenticated freelancer"""
         return models.Freelancer.objects.get(email=self.request.user.email)
 
 
@@ -68,11 +67,12 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        """Retrieve and return the authenticated client user"""
+        """Retrieve and return the authenticated client"""
         return models.Client.objects.get(email=self.request.user.email)
 
 
 class RemoveFreelancerView(generics.DestroyAPIView):
+    """Remove the authenticated freelnacer"""
     queryset = models.Freelancer.objects.all()
     serializer_class = FreelancerSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -82,6 +82,7 @@ class RemoveFreelancerView(generics.DestroyAPIView):
 
 
 class RemoveClientView(generics.DestroyAPIView):
+    """Remove the authenticated client"""
     queryset = models.Client.objects.all()
     serializer_class = ClientSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -96,6 +97,15 @@ class ManageClientListView(generics.ListAPIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
+class ManageFreelnacerListView(generics.ListAPIView):
+    """View for listing freelancer"""
+    queryset = models.Freelancer.objects.all()
+    serializer_class = FreelancerSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+
+
 class ManageClientDetailView(generics.RetrieveAPIView):
     """View for retrieving a single client"""
     queryset = models.Client.objects.all()
@@ -103,16 +113,24 @@ class ManageClientDetailView(generics.RetrieveAPIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
+class ManageFreelancerDetailView(generics.RetrieveAPIView):
+    """View for retrieving a single freelancer"""
+    queryset = models.Freelancer.objects.all()
+    serializer_class = FreelancerSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+
 
 class ManageProjectListView(generics.ListAPIView):
-    """View for listing projects"""
+    """View for listing all projects in the system"""
     queryset = models.Project.objects.all()
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
 class ManageProjectDetailView(generics.RetrieveAPIView):
-    """View for retrieving a signle project"""
+    """View for retrieving a single project"""
     queryset = models.Project.objects.all()
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]

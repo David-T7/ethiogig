@@ -81,6 +81,40 @@ class ModelTest(TestCase):
         self.assertEqual(project.title, str(project))
         self.assertIsNone(project.client)  # Check if the client is set to None
         self.assertEqual(project.status, 'open')
+    def test_create_contract(self):
+        client = models.Client.objects.create_user(
+            email='client@example.com',
+            password='testpass123',
+            company_name='Test Client Company'
+        )
+        freelancer = models.Freelancer.objects.create_user(
+            email='freelancer@example.com',
+            password='testpass123',
+            first_name='John',
+            last_name='Doe'
+        )
+        project = models.Project.objects.create(
+            client=client,
+            title='Project 1',
+            description='A sample project',
+            budget=1000,
+            deadline='2024-07-31'
+        )
+
+        contract = models.Contract.objects.create(
+            client = client,
+            freelancer = freelancer,
+            project= project,
+            terms = 'These are the contract terms.',
+            start_date= '2024-07-01T00:00:00Z',
+            end_date= '2024-08-01T00:00:00Z',
+            amount_agreed = '1000.00',
+            payment_terms = 'Payment will be made in full upon completion.',
+            freelancer_accepted_terms= False,
+            status= 'active',
+            payment_status= 'not_started'
+        ) 
+        self.assertEqual(str(contract) , f"Contract for {project.title} between {client.company_name} and {freelancer.first_name} {freelancer.last_name}")
 
 
     
