@@ -1,7 +1,12 @@
-from django.urls import path
+from django.urls import path , include
 from . import views
+from rest_framework.routers import DefaultRouter
 
 app_name = 'user'
+
+router = DefaultRouter()
+router.register('chats', views.ChatViewSet)
+router.register('chats/(?P<chat_pk>[^/.]+)/messages', views.MessageViewSet, basename='chat-messages')
 
 urlpatterns = [
     path('freelancer/create/', views.CreateFreelancerView.as_view(), name='create-freelancer'),
@@ -17,4 +22,5 @@ urlpatterns = [
     path('freelancers/', views.ManageFreelnacerListView.as_view(), name="get-freelancers"),
     path('client/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),
     path('freelancer/<int:pk>/', views.ManageFreelancerDetailView.as_view(), name='freelancer-detail'),
+    path('', include(router.urls)),
 ]

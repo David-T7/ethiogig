@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework import generics, authentication, permissions, status , viewsets
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from user.serializers import FreelancerSerializer, ClientSerializer, CustomTokenObtainPairSerializer
+from user import serializers
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from core import models
@@ -20,7 +20,7 @@ def get_tokens_for_user(user):
 
 class CreateFreelancerView(generics.CreateAPIView):
     """Create a new freelancer in the system"""
-    serializer_class = FreelancerSerializer
+    serializer_class = serializers.FreelancerSerializer
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -33,7 +33,7 @@ class CreateFreelancerView(generics.CreateAPIView):
 
 class CreateClientView(generics.CreateAPIView):
     """Create a new client in the system"""
-    serializer_class = ClientSerializer
+    serializer_class = serializers.ClientSerializer
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -46,12 +46,12 @@ class CreateClientView(generics.CreateAPIView):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     """Obtain JWT token pair"""
-    serializer_class = CustomTokenObtainPairSerializer
+    serializer_class = serializers.CustomTokenObtainPairSerializer
 
 
 class ManageFreelancerView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated freelancer"""
-    serializer_class = FreelancerSerializer
+    serializer_class = serializers.FreelancerSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -62,7 +62,7 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
 
 class ManageClientView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated client"""
-    serializer_class = ClientSerializer
+    serializer_class = serializers.ClientSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -74,7 +74,7 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
 class RemoveFreelancerView(generics.DestroyAPIView):
     """Remove the authenticated freelnacer"""
     queryset = models.Freelancer.objects.all()
-    serializer_class = FreelancerSerializer
+    serializer_class = serializers.FreelancerSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
@@ -84,7 +84,7 @@ class RemoveFreelancerView(generics.DestroyAPIView):
 class RemoveClientView(generics.DestroyAPIView):
     """Remove the authenticated client"""
     queryset = models.Client.objects.all()
-    serializer_class = ClientSerializer
+    serializer_class = serializers.ClientSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
@@ -93,14 +93,14 @@ class RemoveClientView(generics.DestroyAPIView):
 class ManageClientListView(generics.ListAPIView):
     """View for listing clients"""
     queryset = models.Client.objects.all()
-    serializer_class = ClientSerializer
+    serializer_class = serializers.ClientSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
 class ManageFreelnacerListView(generics.ListAPIView):
     """View for listing freelancer"""
     queryset = models.Freelancer.objects.all()
-    serializer_class = FreelancerSerializer
+    serializer_class = serializers.FreelancerSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -109,14 +109,14 @@ class ManageFreelnacerListView(generics.ListAPIView):
 class ManageClientDetailView(generics.RetrieveAPIView):
     """View for retrieving a single client"""
     queryset = models.Client.objects.all()
-    serializer_class = ClientSerializer
+    serializer_class = serializers.ClientSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
 class ManageFreelancerDetailView(generics.RetrieveAPIView):
     """View for retrieving a single freelancer"""
     queryset = models.Freelancer.objects.all()
-    serializer_class = FreelancerSerializer
+    serializer_class = serializers.FreelancerSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -135,3 +135,35 @@ class ManageProjectDetailView(generics.RetrieveAPIView):
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+
+
+
+class ChatViewSet(viewsets.ModelViewSet):
+    """View for managing chats between client and freelancer"""
+    queryset = models.Chat.objects.all()
+    serializer_class = serializers.ChatSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """Filter chats to only include those involving the authenticated user"""
+        user = self.request.user
+        if hasattr(user, 'client'):
+            return self.queryset.filter(client=user.client)
+        elif hasattr(user, 'freelancer'):
+            return self.queryset.filter(freelancer=user.freelancer)
+        else:
+            return self.queryset.none()
+
+class MessageViewSet(viewsets.ModelViewSet):
+    """View for managing messages in a chat"""
+    queryset = models.Message.objects.all()
+    serializer_class = serializers.MessageSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create a message in a chat"""
+        chat_id = self.kwargs.get('chat_pk')
+        chat = generics.get_object_or_404(models.Chat, pk=chat_id)
+        serializer.save(chat=chat, sender=self.request.user)

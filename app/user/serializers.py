@@ -69,3 +69,16 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)
         data.update({'email': self.user.email})
         return data
+
+class MessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Message
+        fields = ['id', 'chat', 'sender', 'content', 'timestamp']
+        read_only_fields = ['id', 'timestamp']
+
+class ChatSerializer(serializers.ModelSerializer):
+    messages = MessageSerializer(many=True, read_only=True)
+    class Meta:
+        model = models.Chat
+        fields = ['id', 'client', 'freelancer', 'created_at', 'messages']
+        read_only_fields = ['id', 'created_at', 'messages']

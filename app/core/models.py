@@ -1,6 +1,10 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager ,PermissionsMixin
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
+
 
 
 class UserManager(BaseUserManager):
@@ -169,3 +173,63 @@ class Contract(models.Model):
         if self.start_date and self.end_date:
             if self.start_date >= self.end_date:
                 raise ValidationError({'end_date': 'End date must be after start date.'})
+
+
+
+class Chat(models.Model):
+    client = models.ForeignKey('Client',   on_delete=models.SET_NULL, null=True, related_name='chats')
+    freelancer = models.ForeignKey('Freelancer',   on_delete=models.SET_NULL, null=True, related_name='chats')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"Chat between {self.client} and {self.freelancer}"
+
+class Message(models.Model):
+    chat = models.ForeignKey(Chat, on_delete=models.SET_NULL, null=True , related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Message from {self.sender} at {self.timestamp}"
+
+class Dispute(models.Model):
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('resolved', 'Resolved'),
+        ('auto_resolved', 'Auto Resolved'),
+    ]
+
+    RETURN_CHOICES = [
+        ('full', 'Full Refund'),
+        ('partial', 'Partial Refund'),
+    ]
+
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
+    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, related_name='created_disputes')
+    updated_at = models.DateTimeField(auto_now=True)
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, related_name='client_disputes')
+    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='freelancer_disputes')
+    contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True)
+    response_deadline = models.DateTimeField(default=timezone.now() + timedelta(days=7))
+    auto_resolved = models.BooleanField(default=False)
+    supporting_documents = models.ManyToManyField('SupportingDocument', blank=True, related_name='related_disputes')
+
+    def save(self, *args, **kwargs):
+        if self.auto_resolved:
+            self.status = 'auto_resolved'
+        super().save(*args, **kwargs)
+
+class SupportingDocument(models.Model):
+    file = models.FileField(upload_to='dispute_docs/')
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    dispute = models.ForeignKey(Dispute, on_delete=models.SET_NULL, null=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True )
+
+    def __str__(self):
+        return self.file.name

@@ -47,3 +47,41 @@ class ContractFreelancerSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id',]
         
+
+    def create(self, validated_data):
+        supporting_documents_data = self.context.get('request').FILES.getlist('supporting_documents')
+        dispute = models.Dispute.objects.create(**validated_data)
+        for document_data in supporting_documents_data:
+            models.SupportingDocument.objects.create(file=document_data)
+        return dispute
+
+
+class SupportingDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.SupportingDocument
+        fields = ('id', 'file', 'uploaded_at', 'dispute')
+        read_only_fields = ('uploaded_at', 'dispute')
+
+
+class DisputeSerializer(serializers.ModelSerializer):
+    supporting_documents = SupportingDocumentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = models.Dispute
+        fields = '__all__'
+        read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'response_deadline', 'auto_resolved']
+
+    # def create(self, validated_data):
+    #     supporting_documents_data = self.context['request'].FILES.getlist('supporting_documents')
+    #     dispute = models.Dispute.objects.create(**validated_data)
+        
+    #     for document_data in supporting_documents_data:
+    #         models.SupportingDocument.objects.create(
+    #             dispute=dispute,
+    #             file=document_data,
+    #             uploaded_by=self.context['request'].user
+    #         )
+        
+    #     return dispute
+
+

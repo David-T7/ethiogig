@@ -8,6 +8,7 @@ router = DefaultRouter()
 # Register viewsets with unique basenames
 router.register('projects', views.ProjectViewSet, basename='project')
 router.register('contracts', views.ContractViewSet, basename='contract')
+router.register('disputes', views.DisputeViewSet, basename='dispute')
 
 # Define the app name for namespace
 app_name = 'project'

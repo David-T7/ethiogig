@@ -1,7 +1,7 @@
 from rest_framework import viewsets , generics ,status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response 
-from .serializers import ProjectSerializer , ContractSerializer , ContractFreelancerSerializer
+from project import serializers
 from core import models
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied , MethodNotAllowed
@@ -10,7 +10,7 @@ from rest_framework.exceptions import PermissionDenied , MethodNotAllowed
 class ProjectViewSet(viewsets.ModelViewSet):
     """View for managing project of a client"""
     queryset = models.Project.objects.all()
-    serializer_class = ProjectSerializer
+    serializer_class = serializers.ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -37,7 +37,7 @@ class ContractViewSet(viewsets.ModelViewSet):
     """Viewset for managing contracts between client and freelancer"""
 
     queryset = models.Contract.objects.all()
-    serializer_class =ContractSerializer
+    serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -69,7 +69,7 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     """Viewset for updating terms acceptance by freelancer"""
 
     queryset = models.Contract.objects.all()
-    serializer_class = ContractFreelancerSerializer
+    serializer_class = serializers.ContractFreelancerSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -91,7 +91,7 @@ class FreelancerContractDetialViewSet(generics.RetrieveAPIView):
     """Viewset for accepting terms by freelancer"""
 
     queryset = models.Contract.objects.all()
-    serializer_class = ContractSerializer
+    serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -100,3 +100,50 @@ class FreelancerContractDetialViewSet(generics.RetrieveAPIView):
         return models.Contract.objects.get(freelancer=self.request.user.freelancer)
 
 
+
+
+class DisputeViewSet(viewsets.ModelViewSet):
+    """Viewset for managing disputes between client and freelancer"""
+
+    queryset = models.Dispute.objects.all()
+    serializer_class = serializers.DisputeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create a dispute, setting the client, freelancer, and created_by fields automatically"""
+        contract = serializer.validated_data['contract']
+        if self.request.user.client == contract.client:
+            dispute = serializer.save(
+                client=self.request.user.client,
+                freelancer=contract.freelancer,
+                created_by=self.request.user,
+            )
+        elif self.request.user.freelancer == contract.freelancer:
+            dispute = serializer.save(
+                client=contract.client,
+                freelancer=self.request.user.freelancer,
+                created_by=self.request.user,
+            )
+        else:
+            raise PermissionDenied("You do not have permission to create a dispute for this contract.")
+
+        # # Handle supporting documents
+        supporting_documents_data = self.request.FILES.getlist('supporting_documents')
+        for doc in supporting_documents_data:
+            supporting_document = models.SupportingDocument.objects.create(file=doc , uploaded_by=self.request.user , dispute=dispute)
+            dispute.supporting_documents.add(supporting_document)
+
+    def update(self, request, *args, **kwargs):
+        """Prevent updates to certain fields"""
+        instance = self.get_object()
+        if 'created_by' in request.data or 'client' in request.data or 'freelancer' in request.data:
+            raise PermissionDenied("You do not have permission to update these fields.")
+        
+        # Handle supporting documents update if needed
+        if 'supporting_documents' in request.FILES:
+            supporting_documents_data = request.FILES.getlist('supporting_documents')
+            for doc in supporting_documents_data:
+                supporting_document = models.SupportingDocument.objects.create(file=doc)
+                instance.supporting_documents.add(supporting_document)
+
+        return super().update(request, *args, **kwargs)
