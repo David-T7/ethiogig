@@ -5,6 +5,7 @@ from rest_framework import status
 from core.models import Dispute, Contract, Client, Freelancer, Project ,SupportingDocument
 from project.serializers import DisputeSerializer
 from django.core.files.uploadedfile import SimpleUploadedFile
+import os
 
 DISPUTE_URL = reverse('project:dispute-list')
 
@@ -45,6 +46,13 @@ class PrivateDisputeApiTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.client_user)
+    
+    def tearDown(self):
+        """Clean up any files created during the test"""
+        documents = SupportingDocument.objects.all()
+        for document in documents:
+            if os.path.exists(document.file.path):
+                os.remove(document.file.path)
 
     def test_create_dispute_with_documents(self):
         """Test creating a dispute with supporting documents"""
@@ -121,7 +129,7 @@ class PrivateDisputeApiTests(TestCase):
     def test_add_documents_to_existing_dispute(self):
         """Test adding supporting documents to an existing dispute"""
         # Create a dispute with initial documents (if needed)
-        self.dispute = Dispute.objects.create(
+        dispute = Dispute.objects.create(
             contract=self.contract,
             title='Payment issue',
             freelancer=self.freelancer_user,
@@ -130,15 +138,14 @@ class PrivateDisputeApiTests(TestCase):
             return_type='partial',
             return_amount=50.00,
         )
-
         # Attach initial documents (if needed)
         initial_document = SupportingDocument.objects.create(
-            dispute=self.dispute,
+            dispute=dispute,
             file=SimpleUploadedFile('initial_document.pdf', b'Test content', content_type='application/pdf'),
             uploaded_by=self.client_user
         )
 
-        initial_document_count = self.dispute.supporting_documents.count()
+        initial_document_count = dispute.supporting_documents.count()
 
         # Upload additional documents
         with open('test_documents/document.pdf', 'rb') as doc1:
@@ -149,10 +156,63 @@ class PrivateDisputeApiTests(TestCase):
         payload = {
             'supporting_documents': [document1, document2]
         }
-        url = reverse('project:dispute-detail', kwargs={'pk': self.dispute.id})
+        url = reverse('project:dispute-detail', kwargs={'pk': dispute.id})
         res = self.client.patch(url, payload, format='multipart')
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.dispute.refresh_from_db()
-        self.assertEqual(self.dispute.supporting_documents.count(), initial_document_count + 2)  # Check the updated count
-    
+        dispute.refresh_from_db()
+        self.assertEqual(dispute.supporting_documents.count(), initial_document_count + 2)  # Check the updated count
+    def test_remove_documents_from_dispute(self):
+        """Test removing supporting documents from a dispute"""
+        # Assume self.dispute already has some documents attached (setUp method)
+        
+        # initial_document_count = self.dispute.supporting_documents.count()
+        dispute = Dispute.objects.create(
+            contract=self.contract,
+            title='Payment issue',
+            freelancer=self.freelancer_user,
+            client = self.client_user,
+            description='Freelancer did not receive payment',
+            return_type='partial',
+            return_amount=50.00,
+        )
+        payload = {
+            'supporting_documents': []  # Empty list to remove all documents
+        }
+        url = reverse('project:dispute-detail', kwargs={'pk': dispute.id})
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        dispute.refresh_from_db()
+        self.assertEqual(dispute.supporting_documents.count(), 0)
+    def test_update_documents_in_dispute(self):
+        """Test updating supporting documents in a dispute"""
+        # Assume self.dispute already has some documents attached (setUp method)
+        dispute = Dispute.objects.create(
+            contract=self.contract,
+            title='Payment issue',
+            freelancer=self.freelancer_user,
+            client = self.client_user,
+            description='Freelancer did not receive payment',
+            return_type='partial',
+            return_amount=50.00,
+        )
+        initial_document_count = dispute.supporting_documents.count()
+
+        # Upload a new document to replace an existing one
+        with open('test_documents/document.pdf', 'rb') as new_doc:
+            new_document = SimpleUploadedFile('new_document.pdf', new_doc.read(), content_type='application/pdf')
+
+        payload = {
+            'supporting_documents': [
+                new_document,
+                # You can also include existing documents if you want to update them
+                # SimpleUploadedFile('existing_document.pdf', existing_doc.read(), content_type='application/pdf'),
+            ]
+        }
+        url = reverse('project:dispute-detail', kwargs={'pk': dispute.id})
+        res = self.client.patch(url, payload, format='multipart')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        dispute.refresh_from_db()
+        self.assertEqual(dispute.supporting_documents.count(), initial_document_count + 1)  # Check the updated count

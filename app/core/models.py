@@ -229,7 +229,9 @@ class SupportingDocument(models.Model):
     file = models.FileField(upload_to='dispute_docs/')
     uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     dispute = models.ForeignKey(Dispute, on_delete=models.SET_NULL, null=True)
-    uploaded_at = models.DateTimeField(auto_now_add=True )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.file.name
+
+
