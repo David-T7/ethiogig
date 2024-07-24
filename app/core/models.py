@@ -39,7 +39,6 @@ class User(AbstractBaseUser , PermissionsMixin):
         return self.email
 
 
-
 class Freelancer(User):
     professional_title = models.CharField(max_length=50, blank=True)
     first_name = models.CharField(max_length=30, blank=True)
@@ -63,6 +62,10 @@ class Freelancer(User):
     REQUIRED_FIELDS = ['first_name','last_name']
     def __str__(self):
         return self.first_name +' '+self.last_name
+    def delete(self, *args, **kwargs):
+        if self.contracts.exists():
+            raise ValidationError("Cannot delete freelancer who is involved in a project.")
+        super().delete(*args, **kwargs)
     
 class Client(User):
     company_name = models.CharField(max_length=255, blank=True )
@@ -74,6 +77,10 @@ class Client(User):
     REQUIRED_FIELDS = ['company_name'] 
     def __str__(self):
         return self.company_name
+    def delete(self, *args, **kwargs):
+        if self.contracts.exists():
+            raise ValidationError("Cannot delete client who is involved in a project.")
+        super().delete(*args, **kwargs)
 
 class PaymentMethod(models.Model):
     method_name = models.CharField(max_length=50, unique=True)
@@ -147,17 +154,19 @@ class Contract(models.Model):
         ],
         default='draft'
     )
+    milestone_based = models.BooleanField(default=False)
     payment_status = models.CharField(
         max_length=20,
         choices=[
             ('not_started', 'Not Started'),
             ('in_progress', 'In Progress'),
-            ('fully_paid', 'Fully Paid'),
-            ('partially_paid', 'Partially Paid'),
+            ('paid', 'Paid'),
             ('failed', 'Failed'),
         ],
         default='not_started'
     )
+
+
     
     def __str__(self):
         return f"Contract for {self.project.title} between {self.client.company_name} and {self.freelancer.first_name} {self.freelancer.last_name}"
@@ -173,6 +182,93 @@ class Contract(models.Model):
         if self.start_date and self.end_date:
             if self.start_date >= self.end_date:
                 raise ValidationError({'end_date': 'End date must be after start date.'})
+    def is_escrow_fulfilled(self):
+        if self.milestone_based:
+            # For milestone-based contracts, check if all related milestones have their escrow fulfilled
+            milestones = Milestone.objects.filter(contract = self)
+            for milestone in milestones:
+                escrow = Escrow.objects.filter(contract=self, milestone=milestone).first()
+                if not escrow or escrow.amount < milestone.amount:
+                    return False
+            return True
+        else:
+            # For full payment contracts, check if the total amount agreed is deposited
+            return Escrow.objects.get(contract=self).amount >= self.amount_agreed
+
+    def start_project(self):
+        if self.is_escrow_fulfilled():
+            self.status = 'active'
+            self.save()
+        else:
+            raise ValidationError("Escrow is not fulfilled.")
+
+class Escrow(models.Model):
+    contract = models.ForeignKey('Contract', on_delete=models.CASCADE)
+    milestone = models.OneToOneField('Milestone', on_delete=models.CASCADE , null=True , blank=True)
+    status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('Released', 'Released')])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deposit_confirmed = models.BooleanField(blank=True , default=False)
+    amount = models.DecimalField(max_digits=10, decimal_places=2 , blank=True , null=True)
+    def release(self):
+        if self.deposit_confirmed and self.contract.status == 'completed':
+            # Handle release logic
+            self.status = 'Released'
+            if self.milestone:
+                self.milestone.payment_status = 'in_progress'
+                self.milestone.save()
+            else:
+                self.contract.payment_status = 'in_progress'
+        elif (self.deposit_confirmed and self.contract.status == 'pending' and self.milestone.status == 'completed'): 
+            # Handle release logic
+            if self.milestone.status == 'completed':
+                self.status = 'Released'
+                self.milestone.payment_status = 'in_progress'
+                self.milestone.save()
+            
+    def __str__(self):
+        return f"Escrow for {self.contract}"
+
+
+
+class Milestone(models.Model):
+    contract = models.ForeignKey('Contract', on_delete=models.CASCADE, related_name='milestones')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True , null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateTimeField()
+    is_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('active', 'Active'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled'),
+        ],
+        default='pending'
+    )
+    payment_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('not_started', 'Not Started'),
+            ('in_progress', 'In Progress'),
+            ('paid', 'Paid'),
+            ('failed', 'Failed'),
+        ],
+        default='not_started'
+    )
+
+    def __str__(self):
+        return self.title
+
+    def clean(self):
+        if self.due_date < timezone.now():
+            raise ValidationError('Due date cannot be in the past.')
+
+
 
 
 

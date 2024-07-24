@@ -29,6 +29,7 @@ class ContractSerializer(serializers.ModelSerializer):
             'status',
             'payment_status',
             'created_at',
+            'milestone_based',
             'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -38,6 +39,16 @@ class ContractSerializer(serializers.ModelSerializer):
             freelancer = models.Freelancer.objects.get(pk=freelancer_id)
             contract = models.Contract.objects.create(freelancer=freelancer, **validated_data)
             return contract
+
+
+class MilestoneSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Milestone
+        fields = ['id', 'contract', 'title', 'description', 'amount', 'due_date', 'is_completed', 'created_at', 'updated_at' , 'status']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+
 class ContractFreelancerSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Contract
@@ -71,17 +82,22 @@ class DisputeSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'response_deadline', 'auto_resolved']
 
-    # def create(self, validated_data):
-    #     supporting_documents_data = self.context['request'].FILES.getlist('supporting_documents')
-    #     dispute = models.Dispute.objects.create(**validated_data)
-        
-    #     for document_data in supporting_documents_data:
-    #         models.SupportingDocument.objects.create(
-    #             dispute=dispute,
-    #             file=document_data,
-    #             uploaded_by=self.context['request'].user
-    #         )
-        
-    #     return dispute
 
+class EscrowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Escrow
+        fields = [
+            'id',
+            'contract',
+            'milestone',
+            'amount',
+            'status',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
+class DepositConfirmedUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Escrow
+        fields = ['deposit_confirmed']

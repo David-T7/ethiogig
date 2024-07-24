@@ -1,10 +1,12 @@
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
 from datetime import timedelta
 from project.tasks import check_unresolved_disputes
 from core.models import Dispute, Client, Freelancer, Contract
+DISPUTE_URL = reverse('project:dispute-list')
 
 class DisputeApiTests(TestCase):
     def setUp(self):
@@ -25,7 +27,7 @@ class DisputeApiTests(TestCase):
             'return_amount': 50.00,
             'contract': self.contract.id
         }
-        res = self.client.post('/api/disputes/', payload)
+        res = self.client.post(DISPUTE_URL, payload)
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data['title'], payload['title'])

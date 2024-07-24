@@ -1,14 +1,13 @@
-from rest_framework import viewsets , generics ,status
+from rest_framework import viewsets, generics, status
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response 
+from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import PermissionDenied, MethodNotAllowed
 from project import serializers
 from core import models
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.exceptions import PermissionDenied , MethodNotAllowed
-
 
 class ProjectViewSet(viewsets.ModelViewSet):
-    """View for managing project of a client"""
+    """View for managing projects of a client"""
     queryset = models.Project.objects.all()
     serializer_class = serializers.ProjectSerializer
     authentication_classes = [JWTAuthentication]
@@ -31,11 +30,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
+class MilestoneViewSet(viewsets.ModelViewSet):
+    """View for managing milestones"""
+    queryset = models.Milestone.objects.all()
+    serializer_class = serializers.MilestoneSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """Filter milestones to only include those related to the authenticated user's contracts"""
+        user = self.request.user
+        if hasattr(user, 'client'):
+            return self.queryset.filter(contract__client=user.client)
+        elif hasattr(user, 'freelancer'):
+            return self.queryset.filter(contract__freelancer=user.freelancer)
+        else:
+            return self.queryset.none()
+
+    def perform_create(self, serializer):
+        contract_id = self.kwargs.get('contract_pk')
+        contract = generics.get_object_or_404(models.Contract, pk=contract_id)
+        serializer.save(contract=contract)
 
 class ContractViewSet(viewsets.ModelViewSet):
     """Viewset for managing contracts between client and freelancer"""
-
     queryset = models.Contract.objects.all()
     serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
@@ -52,22 +70,28 @@ class ContractViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        # Check if freelancer_accepted_terms is being updated by the freelancer
         if 'freelancer_accepted_terms' in request.data:
             raise PermissionDenied("You do not have permission to update freelancer_accepted_terms.")
-        try:
-            if request.user.client == instance.client:
-                serializer = self.get_serializer(instance, data=request.data, partial=True)
-                serializer.is_valid(raise_exception=True)
-                serializer.save()
-                return Response(serializer.data)
-        except:
+
+        if request.user.client != instance.client:
             raise PermissionDenied("You do not have permission to update this contract.")
 
+        if 'status' in request.data and request.data['status'] == 'active':
+            escrows = models.Escrow.objects.filter(contract = instance)
+            if escrows.__len__()>0:
+                if instance.is_escrow_fulfilled():
+                    instance.start_project()
+                    request.data['status'] = 'in_progress'
+                else:
+                    return Response({'status': 'Escrow not fulfilled'}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     """Viewset for updating terms acceptance by freelancer"""
-
     queryset = models.Contract.objects.all()
     serializer_class = serializers.ContractFreelancerSerializer
     authentication_classes = [JWTAuthentication]
@@ -83,13 +107,13 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
         obj = generics.get_object_or_404(queryset, pk=self.kwargs.get('pk'))
         self.check_object_permissions(self.request, obj)
         return obj
+
     def put(self, request, *args, **kwargs):
         """Block PUT method to prevent full updates"""
         raise MethodNotAllowed("PUT method not allowed. Please use PATCH for partial updates.")
 
 class FreelancerContractDetialViewSet(generics.RetrieveAPIView):
     """Viewset for accepting terms by freelancer"""
-
     queryset = models.Contract.objects.all()
     serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
@@ -99,12 +123,8 @@ class FreelancerContractDetialViewSet(generics.RetrieveAPIView):
         """Retrieve and return the authenticated client's contract"""
         return models.Contract.objects.get(freelancer=self.request.user.freelancer)
 
-
-
-
 class DisputeViewSet(viewsets.ModelViewSet):
     """Viewset for managing disputes between client and freelancer"""
-
     queryset = models.Dispute.objects.all()
     serializer_class = serializers.DisputeSerializer
     permission_classes = [IsAuthenticated]
@@ -127,7 +147,7 @@ class DisputeViewSet(viewsets.ModelViewSet):
         else:
             raise PermissionDenied("You do not have permission to create a dispute for this contract.")
 
-        # # Handle supporting documents
+        # Handle supporting documents
         supporting_documents_data = self.request.FILES.getlist('supporting_documents')
         for doc in supporting_documents_data:
             supporting_document = models.SupportingDocument.objects.create(file=doc , uploaded_by=self.request.user , dispute=dispute)
@@ -147,3 +167,125 @@ class DisputeViewSet(viewsets.ModelViewSet):
                 instance.supporting_documents.add(supporting_document)
 
         return super().update(request, *args, **kwargs)
+
+class EscrowViewSet(viewsets.ModelViewSet):
+    """Viewset for managing escrows"""
+    queryset = models.Escrow.objects.all()
+    serializer_class = serializers.EscrowSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create an escrow, ensuring the contract and potential milestone are valid"""
+        contract_id = self.request.data.get('contract')
+        milestone_id = self.request.data.get('milestone')
+
+        if not contract_id:
+            raise PermissionDenied("Contract ID must be provided.")
+
+        # Ensure the contract exists and belongs to the current client
+        contract = generics.get_object_or_404(models.Contract, pk=contract_id, client=self.request.user.client)
+
+        # Check if the contract is milestone-based
+        milestone = None
+        if contract.milestone_based:
+            if milestone_id:
+                # Ensure the milestone exists and belongs to the contract
+                milestone = generics.get_object_or_404(models.Milestone, pk=milestone_id, contract=contract)
+            else:
+                raise PermissionDenied("Milestone ID must be provided for milestone-based contracts.")
+        else:
+            if milestone_id:
+                raise PermissionDenied("Milestone ID should not be provided for one-time payment contracts.")
+
+        serializer.save(contract=contract, milestone=milestone)
+
+    def update(self, request, *args, **kwargs):
+        escrow = self.get_object()
+        contract = escrow.contract
+
+        if contract.client != request.user.client:
+            raise PermissionDenied("You do not have permission to release funds for this escrow.")
+
+        # # Prevent clients and freelancers from updating deposit_confirmed
+        # if 'deposit_confirmed' in request.data:
+        #     raise PermissionDenied("You do not have permission to update deposit_confirmed.")
+
+        if 'status' in request.data and request.data['status'] == 'release':
+            escrow.release()
+            request.data['status'] = 'released'
+
+        serializer = self.get_serializer(escrow, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+class DepositConfirmedUpdateView(generics.UpdateAPIView):
+    """Partial update for deposit_confirmed field"""
+    queryset = models.Escrow.objects.all()
+    serializer_class = serializers.DepositConfirmedUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def update(self, request, *args, **kwargs):
+        # Ensure only non-client and non-freelancer users can update deposit_confirmed
+        user = request.user
+        if hasattr(user, 'client') or hasattr(user, 'freelancer'):
+            raise PermissionDenied("You do not have permission to update deposit_confirmed.")
+
+        return super().update(request, *args, **kwargs)
+
+
+# # Additional Views for specific routes
+
+class EscrowListView(generics.ListCreateAPIView):
+    """View for listing and creating escrows for a specific contract"""
+    queryset = models.Escrow.objects.all()
+    serializer_class = serializers.EscrowSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        contract_id = self.kwargs.get('contract_pk')
+        contract = generics.get_object_or_404(models.Contract, pk=contract_id)
+        return self.queryset.filter(contract = contract)
+
+class EscrowMilestoneListView(generics.ListCreateAPIView):
+    """View for listing and creating escrows for a specific contract"""
+    queryset = models.Escrow.objects.all()
+    serializer_class = serializers.EscrowSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        milestone_id = self.kwargs.get('milestone_pk')
+        milestone = generics.get_object_or_404(models.Milestone, pk=milestone_id)
+        return self.queryset.filter(milestone = milestone)
+
+
+
+# class EscrowDetailView(generics.RetrieveUpdateDestroyAPIView):
+#     """View for retrieving, updating, or deleting a specific escrow"""
+#     queryset = models.Escrow.objects.all()
+#     serializer_class = serializers.EscrowSerializer
+#     authentication_classes = [JWTAuthentication]
+#     permission_classes = [IsAuthenticated]
+        
+#     def get_queryset(self):
+#         contract_id = self.kwargs.get('contract_pk')
+#         return self.queryset.filter(contract_id=contract_id)
+
+
+
+
+
+# class EscrowMilestoneDetailView(generics.RetrieveUpdateDestroyAPIView):
+#     """View for retrieving, updating, or deleting a specific escrow associated with a milestone"""
+#     queryset = models.Escrow.objects.all()
+#     serializer_class = serializers.EscrowSerializer
+#     authentication_classes = [JWTAuthentication]
+#     permission_classes = [IsAuthenticated]
+
+#     def get_queryset(self):
+#         contract_id = self.kwargs.get('contract_pk')
+#         milestone_id = self.kwargs.get('milestone_pk')
+#         return self.queryset.filter(contract_id=contract_id, milestone_id=milestone_id)
