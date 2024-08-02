@@ -3,15 +3,14 @@ from rest_framework import serializers
 from core import models
 
 
-class FreelancerSerializer(serializers.ModelSerializer):
-    """Serializer for the Freelancer model object"""
+class FreelancerCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating Freelancer with fewer required fields"""
     
     class Meta:
         model = models.Freelancer
-        fields = ['id','email', 'password', 'first_name', 'last_name' ,'bio','skills','portfolio','experience','certifications','phone_number','social_links','hourly_rate','availability_status',
-                  'preferred_working_hours','preferred_communication_channels','average_rating','reviews','languages_spoken','selected_payment_method','verified','address','account_status','profile_picture']
+        fields = ['email', 'password', 'first_name', 'last_name']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
-        read_only_fields =['id']
+
     def create(self, validated_data):
         """Create and return a freelancer with encrypted password"""
         password = validated_data.pop('password', None)
@@ -20,6 +19,19 @@ class FreelancerSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+class FreelancerSerializer(serializers.ModelSerializer):
+    """Serializer for the Freelancer model object with all fields"""
+    
+    class Meta:
+        model = models.Freelancer
+        fields = ['id', 'email', 'password', 'first_name', 'last_name', 'bio', 'skills', 'portfolio', 'experience',
+                  'certifications', 'phone_number', 'social_links', 'hourly_rate', 'availability_status',
+                  'preferred_working_hours', 'preferred_communication_channels', 'average_rating', 'reviews',
+                  'languages_spoken', 'selected_payment_method', 'verified', 'address', 'account_status',
+                  'profile_picture']
+        extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
+        read_only_fields = ['id']
 
     def update(self, instance, validated_data):
         """Update and return a freelancer"""
@@ -34,13 +46,15 @@ class FreelancerSerializer(serializers.ModelSerializer):
 
 
 class ClientSerializer(serializers.ModelSerializer):
-    """Serializer for the Client model object"""
+    """Serializer for the Client model object with all fields"""
     
     class Meta:
         model = models.Client
-        fields = ['id','email', 'password', 'company_name' ,'projects_posted','average_project_budget','verified','reviews','address','account_status','profile_picture']
+        fields = ['id', 'email', 'password', 'company_name', 'projects_posted', 'average_project_budget',
+                  'verified', 'reviews', 'address', 'account_status', 'profile_picture']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
-        read_only_fields =['id']
+        read_only_fields = ['id']
+
     def create(self, validated_data):
         """Create and return a client with encrypted password"""
         password = validated_data.pop('password', None)
@@ -60,6 +74,24 @@ class ClientSerializer(serializers.ModelSerializer):
             client.save()
 
         return client
+    
+class ClientCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating a Client with minimal fields"""
+    
+    class Meta:
+        model = models.Client
+        fields = ['email', 'password', 'company_name']
+        extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
+
+    def create(self, validated_data):
+        """Create and return a client with encrypted password"""
+        password = validated_data.pop('password', None)
+        instance = self.Meta.model(**validated_data)
+        if password is not None:
+            instance.set_password(password)
+        instance.save()
+        return instance
+
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):

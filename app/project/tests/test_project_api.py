@@ -6,7 +6,7 @@ from core import models
 from ..serializers import ProjectSerializer
 
 PROJECT_URL = reverse('project:project-list')
-PROJECT_UPDATE_URL = reverse('project:project-detail', kwargs={'pk': 1})  # Replace '1' with an actual project ID
+PROJECT_UPDATE_URL =  lambda pk:reverse('project:project-detail', kwargs={'pk': pk})  # Replace '1' with an actual project ID
 
 
 class PrivateApiTests(TestCase):

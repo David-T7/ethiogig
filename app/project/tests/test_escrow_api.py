@@ -175,7 +175,7 @@ class PrivateEscrowApiTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # serializer = EscrowSerializer(escrow)
         # print("escrow milestone serializer result",serializer.data)
-        self.assertEqual(res.data[0]['id'], escrow.pk)
+        self.assertEqual(res.data[0]['id'], str(escrow.pk))
 
     def test_reterive_escrow_with_contract(self):
         """Test retrieving an escrow record with a contract"""

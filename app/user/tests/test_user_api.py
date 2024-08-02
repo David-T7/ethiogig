@@ -5,8 +5,8 @@ from core import models
 from rest_framework.test import APIClient
 from rest_framework import status
 
-CREATE_FREELANCER_URL = reverse('user:create-freelancer')
-CREATE_CLIENT_URL = reverse('user:create-client')
+CREATE_FREELANCER_URL = reverse('user:freelancer-list')
+CREATE_CLIENT_URL = reverse('user:client-list')
 GET_FREELANCER_URL = reverse('user:manage-freelancer')
 GET_CLINET_URL = reverse('user:manage-client')
 REMOVE_CLIENT_URL = reverse('user:remove-client')
@@ -78,7 +78,7 @@ class PrivateFreelancerApiTests(TestCase):
         res = self.client.get(GET_FREELANCER_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data['id'],self.user.id,)
+        self.assertEqual(res.data['id'],str(self.user.id),)
         self.assertEqual(res.data['email'] , self.user.email)
     def test_post_me_not_allowed(self):
         """Test POST is not allowed for the me endpoint."""
@@ -116,7 +116,7 @@ class PrivateClientApiTests(TestCase):
         """Test retrieving profile for logged in client ."""
         res = self.client.get(GET_CLINET_URL)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data['id'],self.user.id)
+        self.assertEqual(res.data['id'],str(self.user.id))
         self.assertEqual(res.data['email'], self.user.email)
     def test_post_me_not_allowed(self):
         """Test POST is not allowed for the me endpoint."""

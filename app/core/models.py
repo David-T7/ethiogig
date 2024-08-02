@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
+import uuid
 
 
 
@@ -23,6 +24,7 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 class User(AbstractBaseUser , PermissionsMixin):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True , null=True)
     address = models.CharField(max_length=255, blank=True)
@@ -33,7 +35,7 @@ class User(AbstractBaseUser , PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
     objects = UserManager()
-
+    
     USERNAME_FIELD = 'email'
     def __str__(self):
         return self.email
@@ -83,6 +85,7 @@ class Client(User):
         super().delete(*args, **kwargs)
 
 class PaymentMethod(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     method_name = models.CharField(max_length=50, unique=True)
     details = models.JSONField(default=list, blank=True)  # Store payment details like bank account or PayPal info
     def __str__(self):
@@ -90,6 +93,7 @@ class PaymentMethod(models.Model):
     
 
 class Project(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     client = models.ForeignKey(
         'Client',
         on_delete=models.SET_NULL,
@@ -117,6 +121,7 @@ class Project(models.Model):
 
 
 class Contract(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     client = models.ForeignKey(
         'Client',
         on_delete=models.SET_NULL,
@@ -203,6 +208,7 @@ class Contract(models.Model):
             raise ValidationError("Escrow is not fulfilled.")
 
 class Escrow(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey('Contract', on_delete=models.CASCADE)
     milestone = models.OneToOneField('Milestone', on_delete=models.CASCADE , null=True , blank=True)
     status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('Released', 'Released')])
@@ -232,6 +238,7 @@ class Escrow(models.Model):
 
 
 class Milestone(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False) 
     contract = models.ForeignKey('Contract', on_delete=models.CASCADE, related_name='milestones')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True , null=True)
@@ -273,6 +280,7 @@ class Milestone(models.Model):
 
 
 class Chat(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False) 
     client = models.ForeignKey('Client',   on_delete=models.SET_NULL, null=True, related_name='chats')
     freelancer = models.ForeignKey('Freelancer',   on_delete=models.SET_NULL, null=True, related_name='chats')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -281,6 +289,7 @@ class Chat(models.Model):
         return f"Chat between {self.client} and {self.freelancer}"
 
 class Message(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False) 
     chat = models.ForeignKey(Chat, on_delete=models.SET_NULL, null=True , related_name='messages')
     sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     content = models.TextField()
@@ -290,6 +299,7 @@ class Message(models.Model):
         return f"Message from {self.sender} at {self.timestamp}"
 
 class Dispute(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     STATUS_CHOICES = [
         ('open', 'Open'),
         ('resolved', 'Resolved'),
@@ -322,6 +332,7 @@ class Dispute(models.Model):
         super().save(*args, **kwargs)
 
 class SupportingDocument(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     file = models.FileField(upload_to='dispute_docs/')
     uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     dispute = models.ForeignKey(Dispute, on_delete=models.SET_NULL, null=True)

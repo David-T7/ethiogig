@@ -18,10 +18,12 @@ def get_tokens_for_user(user):
         'access': str(refresh.access_token),
     }
 
-class CreateFreelancerView(generics.CreateAPIView):
-    """Create a new freelancer in the system"""
-    serializer_class = serializers.FreelancerSerializer
-
+class FreelancerViewSet(viewsets.ModelViewSet):
+    queryset = models.Freelancer.objects.all()
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return serializers.FreelancerCreateSerializer
+        return serializers.FreelancerSerializer
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -30,11 +32,14 @@ class CreateFreelancerView(generics.CreateAPIView):
         tokens = get_tokens_for_user(serializer.instance)
         return Response({**serializer.data, **tokens}, status=status.HTTP_201_CREATED, headers=headers)
 
-
-class CreateClientView(generics.CreateAPIView):
+class ClientViewSet(viewsets.ModelViewSet):
     """Create a new client in the system"""
-    serializer_class = serializers.ClientSerializer
+    queryset = models.Client.objects.all()
 
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return serializers.ClientCreateSerializer
+        return serializers.ClientSerializer
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -57,7 +62,7 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         """Retrieve and return the authenticated freelancer"""
-        return models.Freelancer.objects.get(email=self.request.user.email)
+        return models.Freelancer.objects.get(id=self.request.user.id)
 
 
 class ManageClientView(generics.RetrieveUpdateAPIView):
@@ -68,7 +73,7 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         """Retrieve and return the authenticated client"""
-        return models.Client.objects.get(email=self.request.user.email)
+        return models.Client.objects.get(id=self.request.user.id)
 
 
 class RemoveFreelancerView(generics.DestroyAPIView):
@@ -78,7 +83,7 @@ class RemoveFreelancerView(generics.DestroyAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        return self.queryset.get(email=self.request.user.email)
+        return self.queryset.get(id=self.request.user.id)
 
 
 class RemoveClientView(generics.DestroyAPIView):
@@ -88,7 +93,7 @@ class RemoveClientView(generics.DestroyAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        return self.queryset.get(email=self.request.user.email)
+        return self.queryset.get(id=self.request.user.id)
 
 class ManageClientListView(generics.ListAPIView):
     """View for listing clients"""
@@ -106,19 +111,19 @@ class ManageFreelnacerListView(generics.ListAPIView):
 
 
 
-class ManageClientDetailView(generics.RetrieveAPIView):
-    """View for retrieving a single client"""
-    queryset = models.Client.objects.all()
-    serializer_class = serializers.ClientSerializer
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+# class ManageClientDetailView(generics.RetrieveAPIView):
+#     """View for retrieving a single client"""
+#     queryset = models.Client.objects.all()
+#     serializer_class = serializers.ClientSerializer
+#     authentication_classes = [JWTAuthentication]
+#     permission_classes = [permissions.IsAuthenticated]
 
-class ManageFreelancerDetailView(generics.RetrieveAPIView):
-    """View for retrieving a single freelancer"""
-    queryset = models.Freelancer.objects.all()
-    serializer_class = serializers.FreelancerSerializer
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+# class ManageFreelancerDetailView(generics.RetrieveAPIView):
+#     """View for retrieving a single freelancer"""
+#     queryset = models.Freelancer.objects.all()
+#     serializer_class = serializers.FreelancerSerializer
+#     authentication_classes = [JWTAuthentication]
+#     permission_classes = [permissions.IsAuthenticated]
 
 
 
