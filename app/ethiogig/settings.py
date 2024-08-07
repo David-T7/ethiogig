@@ -43,7 +43,9 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'rest_framework_simplejwt',
-    'project'
+    'project',
+    'resume',
+    'services',
 ]
 
 MIDDLEWARE = [
@@ -168,3 +170,7 @@ SIMPLE_JWT = {
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
 }
+
+
+
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

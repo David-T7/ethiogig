@@ -11,7 +11,7 @@ DISPUTE_URL = reverse('project:dispute-list')
 class DisputeApiTests(TestCase):
     def setUp(self):
         self.client_user = Client.objects.create_user(email='client@example.com', password='password123')
-        self.freelancer_user = Freelancer.objects.create_user(email='freelancer@example.com', password='password123' , first_name='test',last_name='test last')
+        self.freelancer_user = Freelancer.objects.create_user(email='freelancer@example.com', password='password123' , full_name='test')
         self.contract = Contract.objects.create(client=self.client_user, freelancer=self.freelancer_user)
         self.client = APIClient()
         self.client.force_authenticate(user=self.client_user)

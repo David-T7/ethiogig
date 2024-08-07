@@ -22,10 +22,10 @@ class UserAdmin(BaseUserAdmin):
 
 class FreelancerAdmin(admin.ModelAdmin):
     ordering = ['id']
-    list_display = ['email', 'first_name', 'last_name', 'verified']
+    list_display = ['email', 'full_name', 'verified']
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
-        (_('Personal Info'), {'fields': ('first_name', 'last_name', 'profile_picture', 'bio')}),
+        (_('Personal Info'), {'fields': ('full_name', 'profile_picture', 'bio')}),
         (_('Contact Info'), {'fields': ('phone_number', 'address', 'social_links')}),
         (_('Freelancer Details'), {'fields': ('professional_title', 'skills', 'portfolio', 'experience',
                                               'certifications', 'hourly_rate', 'availability_status',

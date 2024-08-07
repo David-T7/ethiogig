@@ -5,8 +5,7 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 import uuid
-
-
+from django.contrib.auth.hashers import make_password
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -43,8 +42,7 @@ class User(AbstractBaseUser , PermissionsMixin):
 
 class Freelancer(User):
     professional_title = models.CharField(max_length=50, blank=True)
-    first_name = models.CharField(max_length=30, blank=True)
-    last_name = models.CharField(max_length=30, blank=True)
+    full_name = models.CharField(max_length=30, blank=True)
     bio = models.TextField(blank=True)
     skills = models.JSONField(default=list, blank=True)
     portfolio = models.JSONField(default=list, blank=True)
@@ -61,9 +59,9 @@ class Freelancer(User):
     languages_spoken = models.JSONField(default=list, blank=True)
     selected_payment_method = models.JSONField(default=list, blank=True)
     verified = models.BooleanField(default=False ,blank=True)
-    REQUIRED_FIELDS = ['first_name','last_name']
+    REQUIRED_FIELDS = ['full_name']
     def __str__(self):
-        return self.first_name +' '+self.last_name
+        return self.full_name
     def delete(self, *args, **kwargs):
         if self.contracts.exists():
             raise ValidationError("Cannot delete freelancer who is involved in a project.")
@@ -174,7 +172,7 @@ class Contract(models.Model):
 
     
     def __str__(self):
-        return f"Contract for {self.project.title} between {self.client.company_name} and {self.freelancer.first_name} {self.freelancer.last_name}"
+        return f"Contract for {self.project.title} between {self.client.company_name} and {self.freelancer.full_name}"
 
     def save(self, *args, **kwargs):
         if  self.freelancer_accepted_terms:
@@ -342,3 +340,61 @@ class SupportingDocument(models.Model):
         return self.file.name
 
 
+class Resume(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    full_name = models.CharField(max_length=50)
+    email = models.EmailField(unique=True)
+    position_applied_for = models.CharField(max_length=100)
+    resume_file = models.FileField(upload_to='resumes/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    password = models.CharField(max_length=128 , null=False)  # Password field
+
+    def set_password(self, raw_password):
+        self.password = make_password(raw_password)
+
+    def check_password(self, raw_password):
+        from django.contrib.auth.hashers import check_password
+        return check_password(raw_password, self.password)
+
+    def __str__(self):
+        return self.full_name
+
+
+class ScreeningResult(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.OneToOneField(Resume, on_delete=models.CASCADE)
+    score = models.DecimalField(max_digits=5, decimal_places=2)
+    passed = models.BooleanField()
+    comments = models.TextField()
+    screened_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return "resume screening result for " + self.resume.full_name +f" score :{self.score} passed:{self.passed}"
+
+
+class ScreeningConfig(models.Model):
+    passing_score_threshold = models.DecimalField(max_digits=5, decimal_places=2, default=70.0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Passing Score Threshold: {self.passing_score_threshold}"
+
+
+class Technology(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return self.name
+
+class Service(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    technologies = models.ManyToManyField(Technology, related_name='services')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name

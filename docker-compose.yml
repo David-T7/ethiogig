@@ -17,6 +17,7 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
+      - GEMINI_API_KEY=AIzaSyDE2DbBRs5KBgp4KhFDj4-FopTY6Wt2jxk
     depends_on:
       - db
 

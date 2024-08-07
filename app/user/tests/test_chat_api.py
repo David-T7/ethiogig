@@ -22,8 +22,7 @@ class PrivateChatApiTests(TestCase):
         self.freelancer_user = Freelancer.objects.create(
             email='freelancer@gmail.com',
             password='test123',
-            first_name='Freelancer',
-            last_name='User',
+            full_name='Freelancer',
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.client_user)

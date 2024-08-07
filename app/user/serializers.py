@@ -8,7 +8,7 @@ class FreelancerCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = models.Freelancer
-        fields = ['email', 'password', 'first_name', 'last_name']
+        fields = ['email', 'password', 'full_name']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
 
     def create(self, validated_data):
@@ -25,7 +25,7 @@ class FreelancerSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = models.Freelancer
-        fields = ['id', 'email', 'password', 'first_name', 'last_name', 'bio', 'skills', 'portfolio', 'experience',
+        fields = ['id', 'email', 'password', 'full_name', 'bio', 'skills', 'portfolio', 'experience',
                   'certifications', 'phone_number', 'social_links', 'hourly_rate', 'availability_status',
                   'preferred_working_hours', 'preferred_communication_channels', 'average_rating', 'reviews',
                   'languages_spoken', 'selected_payment_method', 'verified', 'address', 'account_status',
@@ -114,3 +114,7 @@ class ChatSerializer(serializers.ModelSerializer):
         model = models.Chat
         fields = ['id', 'client', 'freelancer', 'created_at', 'messages']
         read_only_fields = ['id', 'created_at', 'messages']
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()

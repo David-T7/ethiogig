@@ -6,7 +6,7 @@ app_name = 'user'
 
 router = DefaultRouter()
 router.register('chats', views.ChatViewSet)
-router.register('chats/(?P<chat_pk>[^/.]+)/messages', views.MessageViewSet, basename='chat-messages')
+router.register('chats/(?P<chat_pk>[0-9a-fA-F-]++)/messages', views.MessageViewSet, basename='chat-messages')
 router.register('freelancer', views.FreelancerViewSet )
 router.register('client', views.ClientViewSet)
 
@@ -17,7 +17,7 @@ urlpatterns = [
     path('freelancer/manage/', views.ManageFreelancerView.as_view(), name="manage-freelancer"),
     path('client/manage/', views.ManageClientView.as_view(), name="manage-client"),
     path('projects/', views.ManageProjectListView.as_view(), name="get-projects"),
-    path('project/<int:pk>/', views.ManageProjectDetailView.as_view(), name='project-detail'),
+    path('project/<uuid:pk>/', views.ManageProjectDetailView.as_view(), name='project-detail'),
     path('clients/', views.ManageClientListView.as_view(), name="get-clients"),
     path('freelancers/', views.ManageFreelnacerListView.as_view(), name="get-freelancers"),
     # path('client/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),

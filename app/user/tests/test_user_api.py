@@ -20,8 +20,7 @@ class PublicApiTests(TestCase):
         payload = {
             'email': 'test@gmail.com',
             'password': 'test123',
-            'first_name': 'Test user',
-            'last_name': 'Test user'
+            'full_name': 'Test user',
         }
         res = self.client.post(CREATE_FREELANCER_URL, payload)
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
@@ -43,8 +42,7 @@ class PublicApiTests(TestCase):
         payload ={
             'email':'test@gmail.com',
             'password':'test123',
-            'first_name':'Test user',
-            'last_name':'Test user'
+            'full_name': 'Test user',
         }
         models.Freelancer.objects.create(**payload)
         res = self.client.post(CREATE_FREELANCER_URL , payload)
@@ -53,8 +51,7 @@ class PublicApiTests(TestCase):
         payload ={
             'email':'test@gmail.com',
             'password':'12',
-            'first_name':'Test user',
-            'last_name':'Test user'
+            'full_name': 'Test user',
         }
         res = self.client.post(CREATE_FREELANCER_URL , payload)
         self.assertEqual(res.status_code , status.HTTP_400_BAD_REQUEST)
@@ -68,8 +65,7 @@ class PrivateFreelancerApiTests(TestCase):
         self.user = models.Freelancer.objects.create(
             email='test@gmail.com',
             password='test123',
-            first_name='Test user',
-            last_name='Test user'
+            full_name='Test user',
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
@@ -86,12 +82,12 @@ class PrivateFreelancerApiTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
     def test_update_user_profile(self):
         """Test updating the user profile for the authenticated freelancer."""
-        payload = {'first_name': 'new name', 'password': 'newpassword123'}
+        payload = {'full_name': 'new name', 'password': 'newpassword123'}
 
         res = self.client.patch(GET_FREELANCER_URL, payload)
 
         self.user.refresh_from_db()
-        self.assertEqual(self.user.first_name, payload['first_name'])
+        self.assertEqual(self.user.full_name, payload['full_name'])
         self.assertTrue(self.user.check_password(payload['password']))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
     def test_delete_user_profile(self):

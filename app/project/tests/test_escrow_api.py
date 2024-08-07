@@ -22,8 +22,7 @@ class PrivateEscrowApiTests(TestCase):
         self.freelancer_user = models.Freelancer.objects.create_user(
             email='freelancer@gmail.com',
             password='test123',
-            first_name='Freelancer',
-            last_name='User',
+            full_name='Freelancer',
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.client_user)
@@ -222,8 +221,7 @@ class PublicEscrowApiTests(TestCase):
         self.freelancer_user = models.Freelancer.objects.create_user(
             email='freelancer@gmail.com',
             password='test123',
-            first_name='Freelancer',
-            last_name='User',
+            full_name='Freelancer',
         )
         self.project = models.Project.objects.create(
             client=self.client_user,

@@ -8,7 +8,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 from django.urls import path
-
+from user import views
 from django.contrib import admin
 from django.urls import include, path
 from django.conf.urls.static import static
@@ -21,6 +21,10 @@ urlpatterns = [
     path('api/schema/' , SpectacularAPIView.as_view() , name='api-schema'),
     path('api/docs/' ,SpectacularSwaggerView.as_view( url_name = 'api-schema') , name='api-docs'),
     path('api/user/' , include('user.urls')),
+    path('api/resume/' , include('resume.urls')),
+    path('api/services/' , include('services.urls')),
     path('api/project/' , include('project.urls')),
     path('api/user/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('reset-password/<uidb64>/<token>/',views.reset_password, name='reset-password'),
+    path('password-reset-request/', views.PasswordResetRequestView.as_view(), name='password-reset-request'),
 ]
