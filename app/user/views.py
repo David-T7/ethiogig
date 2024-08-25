@@ -15,6 +15,14 @@ from django.contrib.auth import get_user_model
 from django.utils.http import urlsafe_base64_decode
 from django.shortcuts import get_object_or_404
 from .utils import send_password_reset_email
+from django.contrib.auth import authenticate
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework.decorators import permission_classes
+from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth.models import User
+from .serializers import MessageCountSerializer, NotificationCountSerializer
+
 
 def get_tokens_for_user(user):
     """Generate JWT tokens for a user"""
@@ -23,6 +31,65 @@ def get_tokens_for_user(user):
         'refresh': str(refresh),
         'access': str(refresh.access_token),
     }
+
+
+class LoginView(APIView):
+    """
+    View to handle user login.
+    Returns a JWT token, email, and role of the user.
+    """
+
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+        user = authenticate(request, email=email, password=password)
+        print("user is ",user)
+        if user is not None:
+            # Generate tokens using SimpleJWT
+            refresh = RefreshToken.for_user(user)
+            token = {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            }
+
+            # Determine user role (Freelancer or Client)
+            role = None
+            if models.Freelancer.objects.filter(id=user.id).exists():
+                role = 'freelancer'
+            elif models.Client.objects.filter(id=user.id).exists():
+                role = 'client'
+            
+            # Prepare response data
+            data = {
+                'token': token,
+                'email': user.email,
+                'role': role,
+            }
+
+            return Response(data, status=status.HTTP_200_OK)
+
+        return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+class UserRoleView(APIView):
+    """
+    View to return the user's role based on their JWT token.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # Extract the user role from the request.user object
+        print("in role get")
+        user = request.user
+        print("user is ",user)
+        if models.Freelancer.objects.filter(id=user.id).exists():
+            role = 'freelancer'
+        elif models.Client.objects.filter(id=user.id).exists():
+            role = 'client'
+        else:
+            role = 'Admin'
+        return Response({'role': role}, status=status.HTTP_200_OK)
+
+
 
 class FreelancerViewSet(viewsets.ModelViewSet):
     queryset = models.Freelancer.objects.all()
@@ -59,6 +126,58 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     """Obtain JWT token pair"""
     serializer_class = serializers.CustomTokenObtainPairSerializer
 
+class TokenRefreshView(APIView):
+    """
+    View to handle refreshing JWT tokens.
+    Accepts a refresh token and returns a new access and refresh token.
+    """
+    
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+
+        if refresh_token is None:
+            return Response({'detail': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            refresh = RefreshToken(refresh_token)
+            new_access_token = refresh.access_token
+
+            # Optionally, rotate the refresh token
+            refresh.set_jti()
+            refresh.set_exp()
+            refresh.set_iat()
+
+            return Response({
+                'access': str(new_access_token),
+                'refresh': str(refresh),
+            }, status=status.HTTP_200_OK)
+        
+        except TokenError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class AuthenticateView(APIView):
+    """
+    View to check if the access token is valid and not expired.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        auth_header = request.headers.get('Authorization')
+
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return Response({'detail': 'Authorization header is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        access_token = auth_header.split(' ')[1]
+
+        try:
+            # Validate the access token
+            token = AccessToken(access_token)
+            # Optionally, you can also check for additional claims in the token if needed
+
+            return Response({'detail': 'Access token is valid'}, status=status.HTTP_200_OK)
+        
+        except TokenError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
 class ManageFreelancerView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated freelancer"""
@@ -178,7 +297,40 @@ class MessageViewSet(viewsets.ModelViewSet):
         chat_id = self.kwargs.get('chat_pk')
         chat = generics.get_object_or_404(models.Chat, pk=chat_id)
         serializer.save(chat=chat, sender=self.request.user)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def unread_message_count(request):
+    user = request.user
+
+    # Determine if the user is a client or freelancer
+    if hasattr(user, 'client'):
+        chats = user.client.chats.all()
+    elif hasattr(user, 'freelancer'):
+        chats = user.freelancer.chats.all()
+    else:
+        return Response({'detail': 'User not associated with a client or freelancer profile.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    unread_count = models.Message.objects.filter(chat__in=chats, read=False).count()
     
+    # Serialize the response
+    data = {'count': unread_count}
+    serializer = MessageCountSerializer(data)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def unread_notification_count(request):
+    user = request.user
+    
+    unread_count = models.Notification.objects.filter(user=user, read=False).count()
+    
+    # Serialize the response
+    data = {'count': unread_count}
+    serializer = NotificationCountSerializer(data)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 def reset_password(request, uidb64, token):
     """Reset the user's password."""
@@ -214,3 +366,23 @@ class PasswordResetRequestView(APIView):
             except models.User.DoesNotExist:
                 return Response({'error': 'User with this email does not exist'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    """Viewset for managing notifications"""
+    serializer_class = serializers.NotificationSerializer
+    queryset = models.Notification.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """Filter notifications to only include those for the authenticated user"""
+        user = self.request.user
+        return self.queryset.filter(user=user)
+
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = serializers.PasswordChangeSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({'detail': 'Password has been updated successfully.'}, status=status.HTTP_200_OK)

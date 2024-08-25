@@ -125,13 +125,30 @@ def send_password_reset_email(user_email):
 def create_freelancer_from_resume(resume):
     """Create a Freelancer from a passed resume and send a password reset link."""
     user_email = resume.email
+
     # Create or update Freelancer profile
-    freelancer , created = models.Freelancer.objects.get_or_create(
+    freelancer, freelancer_created = models.Freelancer.objects.get_or_create(
         email=user_email,
-        full_name= resume.full_name,
-        is_active = False,
+        defaults={
+            'full_name': resume.full_name,
+            # Add other default fields as necessary
+        }
     )
-    user = models.User.objects.get(email=user_email)
-    user.set_password(resume.password)
-    if created:
-        freelancer.save()
+
+    # After ensuring the Freelancer is created or updated, handle User
+    user, user_created = models.User.objects.get_or_create(
+        email=user_email,
+    )
+
+    # Set the password and save the user
+    if resume.password:
+        user.set_password(resume.password)
+        user.save()
+        # Debugging: Check the hashed password
+        print(f"Hashed password for user: {user.password}")
+
+    # Optionally: Send a password reset link if needed
+    # ...
+
+    # Debugging
+    print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.email}")

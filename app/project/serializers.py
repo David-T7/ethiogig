@@ -101,3 +101,9 @@ class DepositConfirmedUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Escrow
         fields = ['deposit_confirmed']
+
+class FreelancerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Freelancer
+        fields = ['id', 'full_name', 'professional_title', 'bio', 'skills', 'experience', 'hourly_rate','profile_picture']
+        read_only_fields = ['id']

@@ -208,17 +208,15 @@ class ServiceModelTests(TestCase):
             name="Django",
             description="A high-level Python web framework"
         )
-        self.service = models.Service.objects.create(
+        self.service = models.Services.objects.create(
             name="Web Development",
             description="Professional web development services.",
-            price=1500.00
         )
         self.service.technologies.add(self.tech)
 
     def test_service_creation(self):
         self.assertEqual(self.service.name, "Web Development")
         self.assertEqual(self.service.description, "Professional web development services.")
-        self.assertEqual(self.service.price, 1500.00)
         self.assertIsInstance(self.service.id, uuid.UUID)
         self.assertEqual(str(self.service), "Web Development")
         self.assertIn(self.tech, self.service.technologies.all())
@@ -232,4 +230,4 @@ class ServiceModelTests(TestCase):
     def test_service_delete(self):
         service_id = self.service.id
         self.service.delete()
-        self.assertFalse(models.Service.objects.filter(id=service_id).exists())
+        self.assertFalse(models.Services.objects.filter(id=service_id).exists())

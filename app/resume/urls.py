@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ResumeViewSet, ScreeningResultViewSet, ScreeningConfigViewSet
+from .views import ResumeViewSet, ScreeningResultViewSet, ScreeningConfigViewSet   
 
 router = DefaultRouter()
 router.register(r'resumes', ResumeViewSet)

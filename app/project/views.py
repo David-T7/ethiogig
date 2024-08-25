@@ -5,6 +5,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied, MethodNotAllowed
 from project import serializers
 from core import models
+from rest_framework.views import APIView
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """View for managing projects of a client"""
@@ -26,6 +27,38 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         """Retrieve a single project created by a client"""
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+class FreelancerProjectViewSet(viewsets.ModelViewSet):
+    """View for managing projects a freelancer is involved in"""
+    serializer_class = serializers.ProjectSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Return projects where the freelancer is involved"""
+        # Get the freelancer associated with the authenticated user
+        freelancer = self.request.user.freelancer
+
+        # Get contracts associated with the freelancer
+        contracts = models.Contract.objects.filter(freelancer=freelancer)
+
+        # Get project IDs from these contracts
+        project_ids = contracts.values_list('project_id', flat=True)
+
+        # Filter projects by these IDs
+        return models.Project.objects.filter(id__in=project_ids)
+
+    def list(self, request, *args, **kwargs):
+        """List projects a freelancer is involved in"""
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve a single project a freelancer is involved in"""
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
@@ -112,16 +145,16 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
         """Block PUT method to prevent full updates"""
         raise MethodNotAllowed("PUT method not allowed. Please use PATCH for partial updates.")
 
-class FreelancerContractDetialViewSet(generics.RetrieveAPIView):
-    """Viewset for accepting terms by freelancer"""
+class FreelancerContractListViewSet(generics.ListAPIView):
+    """Viewset for listing contracts associated with the authenticated freelancer"""
     queryset = models.Contract.objects.all()
     serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get_object(self):
-        """Retrieve and return the authenticated client's contract"""
-        return models.Contract.objects.get(freelancer=self.request.user.freelancer)
+    def get_queryset(self):
+        """Retrieve and return the contracts for the authenticated freelancer"""
+        return models.Contract.objects.filter(freelancer=self.request.user.freelancer)
 
 class DisputeViewSet(viewsets.ModelViewSet):
     """Viewset for managing disputes between client and freelancer"""
@@ -261,6 +294,50 @@ class EscrowMilestoneListView(generics.ListCreateAPIView):
         milestone = generics.get_object_or_404(models.Milestone, pk=milestone_id)
         return self.queryset.filter(milestone = milestone)
 
+class ProjectFreelancersView(APIView):
+    """
+    View to return freelancers associated with a given project.
+    """
+
+    def get(self, request, project_id):
+        try:
+            # Fetch the project by ID
+            project = models.Project.objects.get(id=project_id)
+
+            # Find contracts associated with this project
+            contracts = models.Contract.objects.filter(project=project)
+
+            # Extract freelancers from these contracts
+            freelancers = [contract.freelancer for contract in contracts]
+
+            # Serialize the freelancers
+            serializer = serializers.FreelancerSerializer(freelancers, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except models.Project.DoesNotExist:
+            return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ProjectMilestonesView(APIView):
+    """
+    View to return milestones associated with a given project.
+    """
+
+    def get(self, request, project_id):
+        try:
+            # Fetch the project by ID
+            project = models.Project.objects.get(id=project_id)
+
+            # Find contracts associated with this project
+            contracts = models.Contract.objects.filter(project=project)
+
+            # Get all milestones related to the contracts of this project
+            milestones = models.Milestone.objects.filter(contract__in=contracts)
+
+            # Serialize the milestones
+            serializer = serializers.MilestoneSerializer(milestones, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except models.Project.DoesNotExist:
+            return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 # class EscrowDetailView(generics.RetrieveUpdateDestroyAPIView):

@@ -21,10 +21,12 @@ urlpatterns = [
     path('api/schema/' , SpectacularAPIView.as_view() , name='api-schema'),
     path('api/docs/' ,SpectacularSwaggerView.as_view( url_name = 'api-schema') , name='api-docs'),
     path('api/user/' , include('user.urls')),
-    path('api/resume/' , include('resume.urls')),
-    path('api/services/' , include('services.urls')),
-    path('api/project/' , include('project.urls')),
+    path('api/' , include('resume.urls')),
+    path('api/' , include('services.urls')),
+    path('api/' , include('project.urls')),
     path('api/user/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('reset-password/<uidb64>/<token>/',views.reset_password, name='reset-password'),
     path('password-reset-request/', views.PasswordResetRequestView.as_view(), name='password-reset-request'),
 ]
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
