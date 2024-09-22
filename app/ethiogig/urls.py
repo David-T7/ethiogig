@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/docs/' ,SpectacularSwaggerView.as_view( url_name = 'api-schema') , name='api-docs'),
     path('api/user/' , include('user.urls')),
     path('api/' , include('resume.urls')),
+    path('api/' , include('interview.urls')),
     path('api/' , include('services.urls')),
     path('api/' , include('project.urls')),
     path('api/user/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

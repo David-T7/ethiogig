@@ -128,7 +128,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Notification
-        fields = ['id', 'user', 'type', 'title', 'description', 'timestamp', 'read']
+        fields = ['id', 'user', 'type', 'title', 'description', 'timestamp', 'read','data']
         read_only_fields = ['id']
 
 class PasswordChangeSerializer(serializers.Serializer):

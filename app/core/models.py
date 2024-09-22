@@ -93,6 +93,20 @@ class Client(User):
             raise ValidationError("Cannot delete client who is involved in a project.")
         super().delete(*args, **kwargs)
 
+class Interviewer(User):
+    full_name = models.CharField(max_length=100)
+    expertise = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True, blank=False)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    interviews_per_week = models.IntegerField(default=1)
+    max_interviews_per_day = models.IntegerField(default=1)
+    # New fields for working hours
+    working_hours_start = models.TimeField(default=timezone.now)  # Start time of working hours
+    working_hours_end = models.TimeField(default=timezone.now)    # End time of working hours
+
+    def __str__(self):
+        return f"{self.full_name} - {self.expertise}"
+
+
 class PaymentMethod(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     method_name = models.CharField(max_length=50, unique=True)
@@ -107,6 +121,7 @@ class Project(models.Model):
         'Client',
         on_delete=models.SET_NULL,
         null=True,
+        blank=False
     )
     title = models.CharField(max_length=255)
     description = models.TextField()
@@ -416,11 +431,40 @@ class SkillSearch(models.Model):
 class Notification(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
-    type = models.CharField(max_length=20)  # e.g., 'alert', 'message'
+    type = models.CharField(max_length=100)  # e.g., 'alert', 'message'
     title = models.CharField(max_length=255)
     description = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
     read = models.BooleanField(default=False)
+    data = models.JSONField(default=list)
 
     def __str__(self):
         return f"{self.title} - {self.user.email}"
+
+
+class Appointment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='appointments')
+    category = models.CharField(max_length=255)  # Category (e.g., Frontend, Backend, etc.)
+    skills_passed = models.JSONField(default=list)  # List of skills passed as a JSON field
+    appointment_date = models.DateTimeField(null=True)  # Appointment date
+    appointment_date_options = models.JSONField(default=list, blank=True)  # List of appointment date options
+    done = models.BooleanField(default=False)
+    def __str__(self):
+        return f"Appointment for Freelancer {self.freelancer_id} in {self.category} - {self.appointment_date}"
+
+    class Meta:
+        ordering = ['appointment_date']
+
+class FreelancerInterview(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    interviewer = models.ForeignKey(Interviewer, on_delete=models.SET_NULL, null=True, related_name='interviewer_interviews')
+    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='freelancer_interviews')
+    appointment = models.ForeignKey('Appointment', on_delete=models.CASCADE)  # Link to the Appointment
+    passed = models.BooleanField(default=False)  # Whether the freelancer passed the interview
+    feedback = models.TextField(blank=True, null=True)  # Interviewer's feedback on the interview
+    done = models.BooleanField(default=False)
+    def __str__(self):
+        return f"Interview for Freelancer {self.freelancer_id} with Interviewer {self.interviewer_id}"
+
+

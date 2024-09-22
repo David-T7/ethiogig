@@ -1,3 +1,4 @@
+import json
 from django.shortcuts import render
 from rest_framework import generics, authentication, permissions, status , viewsets
 from rest_framework.response import Response
@@ -22,7 +23,13 @@ from rest_framework.decorators import permission_classes
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import User
 from .serializers import MessageCountSerializer, NotificationCountSerializer
-
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models.functions import Replace , Lower
+from django.db import connection
+import json
+from django.core.serializers.json import DjangoJSONEncoder
+from datetime import timedelta, datetime
 
 def get_tokens_for_user(user):
     """Generate JWT tokens for a user"""
@@ -179,15 +186,254 @@ class AuthenticateView(APIView):
         except TokenError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
+from django.utils import timezone
+from datetime import timedelta
+import json
+from django.db.models import Count
+
 class ManageFreelancerView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated freelancer"""
     serializer_class = serializers.FreelancerSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_object(self):
         """Retrieve and return the authenticated freelancer"""
         return models.Freelancer.objects.get(id=self.request.user.id)
+
+    def update(self, request, *args, **kwargs):
+        """Handle freelancer update and merge skills based on 'skill' and 'type'."""
+        instance = self.get_object()  # Get the current freelancer instance
+
+        # Extract the incoming data (assuming 'skills' is sent as part of the update request)
+        new_skills_data = request.data.get('skills')
+
+        if new_skills_data:
+            try:
+                # Parse the JSON string to manipulate skills
+                new_skills_list = json.loads(new_skills_data)
+
+                # Retrieve existing skills from the freelancer instance
+                current_skills_list = json.loads(instance.skills) if instance.skills else []
+
+                # Create a dictionary with a tuple of ('skill', 'type') as the key to facilitate merging
+                current_skills_dict = {
+                    (skill['skill'], skill['type']): skill for skill in current_skills_list
+                }
+
+                # Merge new skills into the existing ones
+                for new_skill in new_skills_list:
+                    skill_key = (new_skill.get('skill'), new_skill.get('type'))
+
+                    if skill_key in current_skills_dict:
+                        # Update existing skill with new data (merge fields if needed)
+                        current_skills_dict[skill_key].update(new_skill)
+                    else:
+                        # Add new skill to the list, ensuring 'verified': False if not provided
+                        if 'verified' not in new_skill:
+                            new_skill['verified'] = False
+                        current_skills_dict[skill_key] = new_skill
+
+                # Convert the updated skills back to a list
+                merged_skills_list = list(current_skills_dict.values())
+
+                # Convert the list back to JSON string before saving it
+                request.data['skills'] = json.dumps(merged_skills_list)
+            except json.JSONDecodeError:
+                return Response({'error': 'Invalid JSON format for skills'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Perform the update
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        # Check the freelancer's skills to create an appointment if necessary
+        skills_data = json.loads(instance.skills)
+
+        both_practical_theoretical = request.data.get('both_practical_theoretical', False)
+        category_unverified_skills = {}
+        skills_by_category = {}
+
+        for skill in skills_data:
+            category = skill.get('category')
+            skill_type = skill.get('type')
+            is_verified = skill.get('verified', False)
+            skill_name = skill.get('skill')
+
+            if not is_verified:
+                if category not in skills_by_category:
+                    skills_by_category[category] = {}
+                if skill_name not in skills_by_category[category]:
+                    skills_by_category[category][skill_name] = {'theoretical': False, 'practical': False}
+
+                skills_by_category[category][skill_name][skill_type] = True
+
+        for category, skills in skills_by_category.items():
+            for skill_name, skill_types in skills.items():
+                if both_practical_theoretical:
+                    if skill_types['theoretical'] and skill_types['practical']:
+                        if category not in category_unverified_skills:
+                            category_unverified_skills[category] = []
+                        category_unverified_skills[category].append(skill_name)
+                else:
+                    if skill_types['theoretical'] or skill_types['practical']:
+                        if category not in category_unverified_skills:
+                            category_unverified_skills[category] = []
+                        category_unverified_skills[category].append(skill_name)
+
+        for category, unverified_skills in category_unverified_skills.items():
+            if len(unverified_skills) >= 1:
+                print("trying to get avaliable interviewers...")
+                # Find interviewers with relevant expertise
+                available_interviewers = self.get_available_interviewers(category)
+                print("avaliable interviewers found",available_interviewers)
+
+                if available_interviewers:
+                    print("trying to get avaliable appointment dates...")
+                    # Generate appointment date options for available interviewers
+                    appointment_date_options = self.generate_appointment_date_options(available_interviewers)
+                    print("avaliable appointment dates found",appointment_date_options)
+
+                    # Create an appointment with date options
+                    appointment = models.Appointment.objects.create(
+                        freelancer=instance,
+                        category=category,
+                        skills_passed=unverified_skills,
+                        appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
+                    )
+                    appointment.save()
+                    # Create a notification for the freelancer about the appointment
+                    notification = models.Notification.objects.create(
+                    user=instance,
+                    type='appointment_date_choice',
+                    title=f"Interview Appointment for {category}",
+                    description=f"Congratulations , You've passed your skills tests and now you are in the final interview round. Please select an interview date from the options given",
+                    data =appointment.appointment_date_options
+                     )
+
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def get_available_interviewers(self, category):
+        """Get interviewers who match the category and have availability."""
+        print("Trying to get interviewers for category:", category)
+        
+        # Normalize the category string
+        expertise = models.Services.objects.filter(name__icontains=category).first()
+        
+        # Check if expertise was found
+        if not expertise:
+            return []  # Return an empty list if no matching expertise is found
+        
+        # Filter active interviewers
+        interviewers = models.Interviewer.objects.filter(
+            expertise=expertise,
+            is_active=True,
+            interviews_per_week__gt=0
+        )
+
+        available_interviewers = []
+        today = timezone.now()
+        start_of_week = today - timedelta(days=today.weekday())  # Start of the current week
+        end_of_week = start_of_week + timedelta(days=6)  # End of the current week
+
+        for interviewer in interviewers:
+            # Count the number of interviews the interviewer has this week
+            interviews_this_week = models.FreelancerInterview.objects.filter(
+                interviewer=interviewer,
+                appointment__appointment_date__range=(start_of_week, end_of_week),
+                done=False
+            ).count()
+
+            # Count the number of interviews the interviewer has today
+            interviews_today = models.FreelancerInterview.objects.filter(
+                interviewer=interviewer,
+                appointment__appointment_date__date=today.date(),
+                done=False
+            ).count()
+
+            # Check if the current time exceeds the interviewer's end working hour
+            if today.time() <= interviewer.working_hours_end:
+                # Calculate available slots
+                remaining_weekly_slots = interviewer.interviews_per_week - interviews_this_week
+                remaining_daily_slots = interviewer.max_interviews_per_day - interviews_today
+                
+                # Store only those who have slots available
+                if remaining_weekly_slots > 0 and remaining_daily_slots > 0:
+                    available_interviewers.append({
+                        'interviewer': interviewer,
+                        'remaining_weekly_slots': remaining_weekly_slots,
+                        'remaining_daily_slots': remaining_daily_slots
+                    })
+
+        # Sort interviewers based on remaining slots (you can customize this sorting logic)
+        available_interviewers.sort(key=lambda x: (x['remaining_weekly_slots'], x['remaining_daily_slots']), reverse=True)
+
+        # Return only the interviewer objects
+        return [entry['interviewer'] for entry in available_interviewers]
+
+    def generate_appointment_date_options(self, interviewers):
+        """Generate a list of available appointment dates for a group of interviewers."""
+        date_options = []
+        today = timezone.now()
+        day_counter = 0
+
+        # Try to find 5 available appointment slots from the pool of interviewers
+        while len(date_options) < 5:
+            for interviewer in interviewers:
+                # Get the interviewer's working hours
+                working_hours_start = interviewer.working_hours_start
+                working_hours_end = interviewer.working_hours_end
+
+                # Calculate the start and end of the week for the current iteration
+                start_of_week = today + timedelta(days=day_counter)
+                end_of_week = start_of_week + timedelta(days=6)
+
+                # Generate potential appointment slots within working hours for each day of the week
+                for single_day in range(7):
+                    current_day = start_of_week + timedelta(days=single_day)
+                    
+                    # Create datetime objects for the start and end of working hours
+                    appointment_start = timezone.make_aware(datetime.combine(current_day.date(), working_hours_start))
+                    appointment_end = timezone.make_aware(datetime.combine(current_day.date(), working_hours_end))
+
+                    # Count existing interviews for this interviewer in the given week
+                    interviews_this_week = models.FreelancerInterview.objects.filter(
+                        interviewer=interviewer,
+                        appointment__appointment_date__range=(start_of_week, end_of_week),
+                        done=False
+                    ).count()
+
+                    # Count existing interviews for today
+                    interviews_today = models.FreelancerInterview.objects.filter(
+                        interviewer=interviewer,
+                        appointment__appointment_date__date=current_day.date(),
+                        done=False
+                    ).count()
+
+                    # If the interviewer has availability this week and today, check the appointment time
+                    if (interviews_this_week < interviewer.interviews_per_week and
+                        interviews_today < interviewer.max_interviews_per_day):
+                        # Check if the appointment time falls within the working hours
+                        if appointment_start < appointment_end:  # Valid working hours
+                            date_options.append({
+                                "date": appointment_start.strftime('%Y-%m-%d %H:%M')
+                            })
+
+                    # If we've generated 5 options, stop
+                    if len(date_options) >= 5:
+                        break
+
+                # Move to the next week if not enough options were generated
+                if len(date_options) >= 5:
+                    break
+            
+            day_counter += 7
+
+        return date_options
+
+
+
 
 
 class ManageClientView(generics.RetrieveUpdateAPIView):
