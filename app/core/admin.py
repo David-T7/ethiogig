@@ -2,7 +2,10 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
 from core.models import (User, Freelancer, Client, PaymentMethod, Services, 
-Technology , Notification , Appointment , Interviewer , FreelancerInterview)
+Technology , Notification , Appointment , Interviewer , FreelancerInterview , SkillSearch,
+Chat , Message , Contract , Milestone , Dispute , CounterOffer , CounterOfferMilestone
+
+)
 
 class UserAdmin(BaseUserAdmin):
     # Define the admin page for users
@@ -62,3 +65,11 @@ admin.site.register(Notification)
 admin.site.register(Appointment)
 admin.site.register(Interviewer)
 admin.site.register(FreelancerInterview)
+admin.site.register(SkillSearch)
+admin.site.register(Chat)
+admin.site.register(Message)
+admin.site.register(Contract)
+admin.site.register(Milestone)
+admin.site.register(Dispute)
+admin.site.register(CounterOffer)
+admin.site.register(CounterOfferMilestone)

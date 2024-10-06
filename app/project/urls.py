@@ -11,17 +11,31 @@ router = DefaultRouter()
 router.register('projects', views.ProjectViewSet)
 router.register('contracts', views.ContractViewSet)
 router.register('disputes', views.DisputeViewSet)
-router.register('contracts/(?P<contract_pk>[0-9a-fA-F-]+)/milestones', views.MilestoneViewSet, basename='contract-milestones')
+router.register('milestones', views.MileStoneViewSet)
+router.register('counter-offer', views.CounterOfferView)
+router.register('counter-offer-milestones', views.CounterOfferMileStoneViewSet , basename="counter-offer-milestone")
 router.register('escrows', views.EscrowViewSet, basename='escrow')
-router.register('freelancer-projects', views.FreelancerProjectViewSet, basename='freelancer-projects')
+router.register('freelancer-projects', views.FreelancerProjectViewSet , basename='freelancer-projects')
+router.register('freelancer-contracts', views.FreelancerContractListViewSet, basename='freelancer-contract-list-view')
+router.register('counter-offers', views.CounterOfferViewSet , basename='counter-offers')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('freelancer-contracts/', views.FreelancerContractListViewSet.as_view(), name='freelancer-contract-list-view'),
-    path('freelancer-contracts/<uuid:pk>/', views.FreelancerContractViewSet.as_view(), name='freelancer-contract-detail'),
+    path('milestones/project/<uuid:project_id>/', views.MilestoneByProjectView.as_view(), name='milestones-by-project'),
+    path('contracts/<uuid:contract_id>/milestones/', views.MilestoneListViewSet.as_view(), name='contract-milestones'),
+    path('counter-offer/<uuid:counter_offer_id>/milestones/', views.CounterOfferMilestoneListViewSet.as_view(), name='counter-offer-milestones'),
+    path('contracts/<uuid:contract_id>/disputes/', views.DisputeListView.as_view(), name='contract-disputes'),
+    path('contracts/<uuid:contract_id>/counter-offers/', views.CounterOfferViewSet.as_view({'get': 'list'})),
+    path('disputes/<uuid:dispute_id>/cancel/', views.CancelDisputeView.as_view(), name='cancel_dispute'),
+    path('freelancer-contracts-update/<uuid:pk>/', views.FreelancerContractViewSet.as_view(), name='freelancer-contract-detail'),
     path('escrows/<uuid:pk>/update-deposit-confirmed/', views.DepositConfirmedUpdateView.as_view(), name='update-deposit-confirmed'),
     path('contracts/<uuid:contract_pk>/escrows/', views.EscrowListView.as_view(), name='contract-escrows-list'),
     path('milestones/<uuid:milestone_pk>/escrows/', views.EscrowMilestoneListView.as_view(), name='milestone-escrows-list'),
     path('projects/<uuid:project_id>/freelancers/', views.ProjectFreelancersView.as_view(), name='project-freelancers'),
     path('projects/<uuid:project_id>/milestones/', views.ProjectMilestonesView.as_view(), name='project-milestones'),
 ]
+
+
+
+
+

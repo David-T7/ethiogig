@@ -46,7 +46,11 @@ class Freelancer(User):
         ('part_time', 'Part time (Less than 40 hrs/week)'),
         ('hourly', 'Hourly'),
     ]
-
+    availability_choice = [
+         ('avaliable', 'avaliable'),
+         ('not avaliable', 'avaliable'),
+         ('', 'avaliable'),
+    ]
     professional_title = models.CharField(max_length=50, blank=True)
     full_name = models.CharField(max_length=30, blank=True)
     bio = models.TextField(blank=True)
@@ -104,7 +108,7 @@ class Interviewer(User):
     working_hours_end = models.TimeField(default=timezone.now)    # End time of working hours
 
     def __str__(self):
-        return f"{self.full_name} - {self.expertise}"
+        return f"{self.id} - {self.expertise}"
 
 
 class PaymentMethod(models.Model):
@@ -146,6 +150,7 @@ class Project(models.Model):
 
 class Contract(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=100 , null=True,blank=True )
     client = models.ForeignKey(
         'Client',
         on_delete=models.SET_NULL,
@@ -177,9 +182,12 @@ class Contract(models.Model):
         choices=[
             ('draft', 'Draft'),
             ('pending', 'Pending'),
+            ('accepted', 'accepted'),
             ('active', 'Active'),
             ('completed', 'Completed'),
-            ('cancelled', 'Cancelled'),
+            ('canceled', 'Canceled'),
+            ('inDispute', 'InDispute'),
+
         ],
         default='draft'
     )
@@ -195,41 +203,61 @@ class Contract(models.Model):
         default='not_started'
     )
 
-
     
     def __str__(self):
-        return f"Contract for {self.project.title} between {self.client.company_name} and {self.freelancer.full_name}"
-
-    def save(self, *args, **kwargs):
-        if  self.freelancer_accepted_terms:
-            self.status = 'active'
-        elif not self.freelancer_accepted_terms:
-            self.status = 'pending'
-        super().save(*args, **kwargs)
+        return f"Contract for {self.project.title} between {self.client.company_name}"
     def clean(self):
         super().clean()
         if self.start_date and self.end_date:
             if self.start_date >= self.end_date:
                 raise ValidationError({'end_date': 'End date must be after start date.'})
-    def is_escrow_fulfilled(self):
-        if self.milestone_based:
-            # For milestone-based contracts, check if all related milestones have their escrow fulfilled
-            milestones = Milestone.objects.filter(contract = self)
-            for milestone in milestones:
-                escrow = Escrow.objects.filter(contract=self, milestone=milestone).first()
-                if not escrow or escrow.amount < milestone.amount:
-                    return False
-            return True
-        else:
-            # For full payment contracts, check if the total amount agreed is deposited
-            return Escrow.objects.get(contract=self).amount >= self.amount_agreed
+    # def is_escrow_fulfilled(self):
+    #     if self.milestone_based:
+    #         # For milestone-based contracts, check if all related milestones have their escrow fulfilled
+    #         milestones = Milestone.objects.filter(contract = self)
+    #         for milestone in milestones:
+    #             escrow = Escrow.objects.filter(contract=self, milestone=milestone).first()
+    #             if not escrow or escrow.amount < milestone.amount:
+    #                 return False
+    #         return True
+    #     else:
+    #         # For full payment contracts, check if the total amount agreed is deposited
+    #         return Escrow.objects.get(contract=self).amount >= self.amount_agreed
 
-    def start_project(self):
-        if self.is_escrow_fulfilled():
-            self.status = 'active'
-            self.save()
-        else:
-            raise ValidationError("Escrow is not fulfilled.")
+    # def start_project(self):
+    #     if self.is_escrow_fulfilled():
+    #         self.status = 'active'
+    #         self.save()
+    #     else:
+    #         raise ValidationError("Escrow is not fulfilled.")
+
+class CounterOffer(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    contract = models.ForeignKey(
+        Contract,
+        on_delete=models.CASCADE,
+        related_name='counter_offers'
+    )
+    title = models.CharField(max_length=255 , null=True , blank=False)
+    proposed_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    start_date = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('accepted', 'Accepted'),
+            ('canceled', 'Canceled'),
+        ],
+        default='pending'
+    )
+    milestone_based = models.BooleanField(default=False)
+
+
+
 
 class Escrow(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -275,6 +303,7 @@ class Milestone(models.Model):
         max_length=20,
         choices=[
             ('pending', 'Pending'),
+            ('inDsipute', 'InDispute'),
             ('active', 'Active'),
             ('completed', 'Completed'),
             ('cancelled', 'Cancelled'),
@@ -300,7 +329,17 @@ class Milestone(models.Model):
             raise ValidationError('Due date cannot be in the past.')
 
 
-
+class CounterOfferMilestone(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False) 
+    counter_offer = models.ForeignKey('CounterOffer', on_delete=models.CASCADE, related_name='counter_offers')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True , null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return self.title
 
 
 class Chat(models.Model):
@@ -313,14 +352,18 @@ class Chat(models.Model):
         return f"Chat between {self.client} and {self.freelancer}"
 
 class Message(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False) 
-    chat = models.ForeignKey(Chat, on_delete=models.SET_NULL, null=True , related_name='messages')
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat = models.ForeignKey('Chat', on_delete=models.SET_NULL, null=True, related_name='messages')
     sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
-    content = models.TextField()
+    content = models.TextField(blank=True, null=True)  # Text content of the message
+    file = models.FileField(upload_to='message_files/', blank=True, null=True)  # File upload field
     timestamp = models.DateTimeField(auto_now_add=True)
     read = models.BooleanField(default=False)
     def __str__(self):
         return f"Message from {self.sender} at {self.timestamp}"
+
+def default_deadline():
+    return timezone.now() + timedelta(days=7)
 
 class Dispute(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -339,14 +382,15 @@ class Dispute(models.Model):
     description = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
-    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, related_name='created_disputes')
+    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=False ,related_name='created_disputes')
     updated_at = models.DateTimeField(auto_now=True)
-    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, related_name='client_disputes')
-    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='freelancer_disputes')
-    contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True)
-    response_deadline = models.DateTimeField(default=timezone.now() + timedelta(days=7))
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True,blank=False, related_name='client_disputes')
+    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True,blank=False, related_name='freelancer_disputes')
+    contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True , blank=False)
+    milestone = models.ForeignKey(Milestone , on_delete=models.SET_NULL, null=True , blank=False )
+    response_deadline = models.DateTimeField(default=default_deadline)
     auto_resolved = models.BooleanField(default=False)
     supporting_documents = models.ManyToManyField('SupportingDocument', blank=True, related_name='related_disputes')
 

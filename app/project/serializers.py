@@ -21,6 +21,7 @@ class ContractSerializer(serializers.ModelSerializer):
             'id',
             'project',
             'freelancer',
+            'title',
             'terms',
             'start_date',
             'end_date',
@@ -32,7 +33,7 @@ class ContractSerializer(serializers.ModelSerializer):
             'milestone_based',
             'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at','payment_status']
         
         def create(self, validated_data):
             freelancer_id = validated_data.pop('freelancer_id')
@@ -45,7 +46,7 @@ class MilestoneSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Milestone
         fields = ['id', 'contract', 'title', 'description', 'amount', 'due_date', 'is_completed', 'created_at', 'updated_at' , 'status']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at','status']
 
 
 
@@ -67,6 +68,23 @@ class ContractFreelancerSerializer(serializers.ModelSerializer):
         return dispute
 
 
+class CounterOfferSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.CounterOffer
+        fields = [
+            'id','proposed_amount','contract','title','sender','milestone_based','status','start_date','end_date'
+        ]
+        read_only_fields = ['id',]
+
+
+class CounterOfferMilestoneSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.CounterOfferMilestone
+        fields = [
+            'id','counter_offer','title', 'description', 'amount', 'due_date',
+        ]
+        read_only_fields = ['id',]
+
 class SupportingDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.SupportingDocument
@@ -75,12 +93,30 @@ class SupportingDocumentSerializer(serializers.ModelSerializer):
 
 
 class DisputeSerializer(serializers.ModelSerializer):
-    supporting_documents = SupportingDocumentSerializer(many=True, read_only=True)
-
     class Meta:
         model = models.Dispute
-        fields = '__all__'
-        read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'response_deadline', 'auto_resolved']
+        fields = (
+            'id',
+            'title',
+            'description',
+            'return_type',
+            'return_amount',
+            'contract',
+            'status',
+            'created_at',
+            'milestone',
+            'updated_at',
+            'response_deadline',
+            'auto_resolved',
+        )
+        read_only_fields = [
+            'id',
+            'status',
+            'created_at',
+            'updated_at',
+            'response_deadline',
+            'auto_resolved',
+        ]
 
 
 class EscrowSerializer(serializers.ModelSerializer):

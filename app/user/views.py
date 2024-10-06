@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 from django.shortcuts import render
 from rest_framework import generics, authentication, permissions, status , viewsets
 from rest_framework.response import Response
@@ -30,7 +31,7 @@ from django.db import connection
 import json
 from django.core.serializers.json import DjangoJSONEncoder
 from datetime import timedelta, datetime
-
+from rest_framework.exceptions import PermissionDenied
 def get_tokens_for_user(user):
     """Generate JWT tokens for a user"""
     refresh = RefreshToken.for_user(user)
@@ -65,6 +66,8 @@ class LoginView(APIView):
                 role = 'freelancer'
             elif models.Client.objects.filter(id=user.id).exists():
                 role = 'client'
+            elif models.Interviewer.objects.filter(id=user.id).exists():
+                role = 'interviewer'
             
             # Prepare response data
             data = {
@@ -92,6 +95,8 @@ class UserRoleView(APIView):
             role = 'freelancer'
         elif models.Client.objects.filter(id=user.id).exists():
             role = 'client'
+        elif models.Interviewer.objects.filter(id=user.id).exists():
+            role = 'interviewer'
         else:
             role = 'Admin'
         return Response({'role': role}, status=status.HTTP_200_OK)
@@ -285,13 +290,13 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
             if len(unverified_skills) >= 1:
                 print("trying to get avaliable interviewers...")
                 # Find interviewers with relevant expertise
-                available_interviewers = self.get_available_interviewers(category)
+                available_interviewers = get_available_interviewers(category)
                 print("avaliable interviewers found",available_interviewers)
 
                 if available_interviewers:
                     print("trying to get avaliable appointment dates...")
                     # Generate appointment date options for available interviewers
-                    appointment_date_options = self.generate_appointment_date_options(available_interviewers)
+                    appointment_date_options = generate_appointment_date_options(available_interviewers)
                     print("avaliable appointment dates found",appointment_date_options)
 
                     # Create an appointment with date options
@@ -307,14 +312,17 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
                     user=instance,
                     type='appointment_date_choice',
                     title=f"Interview Appointment for {category}",
-                    description=f"Congratulations , You've passed your skills tests and now you are in the final interview round. Please select an interview date from the options given",
-                    data =appointment.appointment_date_options
-                     )
-
-
+                    description=f"Congratulations, You've passed your skills tests and now you are in the final interview round. Please select an interview date from the options given",
+                    data={
+                        "appointment_id": str(appointment.id),  # Include appointment ID as a string
+                        "appointment_date_options": appointment.appointment_date_options  # Include the date options
+                    }
+)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def get_available_interviewers(self, category):
+
+
+def get_available_interviewers( category):
         """Get interviewers who match the category and have availability."""
         print("Trying to get interviewers for category:", category)
         
@@ -372,7 +380,7 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
         # Return only the interviewer objects
         return [entry['interviewer'] for entry in available_interviewers]
 
-    def generate_appointment_date_options(self, interviewers):
+def generate_appointment_date_options(interviewers):
         """Generate a list of available appointment dates for a group of interviewers."""
         date_options = []
         today = timezone.now()
@@ -417,6 +425,7 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
                         # Check if the appointment time falls within the working hours
                         if appointment_start < appointment_end:  # Valid working hours
                             date_options.append({
+                                "interviewer_id":interviewer.id,
                                 "date": appointment_start.strftime('%Y-%m-%d %H:%M')
                             })
 
@@ -445,6 +454,17 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         """Retrieve and return the authenticated client"""
         return models.Client.objects.get(id=self.request.user.id)
+
+class ManageInterviewerView(generics.RetrieveUpdateAPIView):
+    """Manage the authenticated client"""
+    serializer_class = serializers.InterviewerSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        """Retrieve and return the authenticated interviewer"""
+        return models.Interviewer.objects.get(id=self.request.user.id)
+
 
 
 class RemoveFreelancerView(generics.DestroyAPIView):
@@ -531,6 +551,7 @@ class ChatViewSet(viewsets.ModelViewSet):
         else:
             return self.queryset.none()
 
+
 class MessageViewSet(viewsets.ModelViewSet):
     """View for managing messages in a chat"""
     queryset = models.Message.objects.all()
@@ -538,11 +559,135 @@ class MessageViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
+    def create(self, request, *args, **kwargs):
+        print(f"Received request data: {request.data}")  # Debugging line
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         """Create a message in a chat"""
         chat_id = self.kwargs.get('chat_pk')
         chat = generics.get_object_or_404(models.Chat, pk=chat_id)
         serializer.save(chat=chat, sender=self.request.user)
+
+class MarkMessagesAsReadView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, *args, **kwargs):
+        serializer = serializers.MarkMessagesAsReadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message_ids = serializer.validated_data['message_ids']
+        
+        # Fetch messages that belong to the authenticated user and are unread
+        messages = models.Message.objects.filter(
+            id__in=message_ids,
+            read=False,
+        )
+
+        # Update the 'read' status
+        updated_count = messages.update(read=True)
+
+        return Response(
+            {"message": f"{updated_count} message(s) marked as read."},
+            status=status.HTTP_200_OK
+        )
+
+
+class ChatBetweenClientFreelancerView(generics.GenericAPIView):
+    """
+    Fetch the chat between a client and a freelancer using their IDs.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        client_id = request.query_params.get('client_id')
+        freelancer_id = request.query_params.get('freelancer_id')
+
+        # Validate that both IDs are provided
+        if not client_id or not freelancer_id:
+            return Response(
+                {"detail": "client_id and freelancer_id are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fetch the chat between client and freelancer
+        chat = models.Chat.objects.filter(client_id=client_id, freelancer_id=freelancer_id).first()
+
+        if not chat:
+            return Response({"detail": "Chat not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serialize the chat and its messages
+        chat_serializer = serializers.ChatSerializer(chat)
+        messages_serializer = serializers.MessageSerializer(chat.messages.all(), many=True)
+
+        return Response({
+            "chat": chat_serializer.data,
+            "messages": messages_serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class ClientChatListView(generics.GenericAPIView):
+    """View to retrieve all chats and messages for a specific client"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        client_id = request.query_params.get('client_id')
+        
+        if not client_id:
+            return Response({"error": "Client ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Filter chats by client_id
+        chats = models.Chat.objects.filter(client__id=client_id)
+        
+        if not chats.exists():
+            return Response({"error": "No chats found for this client."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serialize the chats
+        chat_data = []
+        for chat in chats:
+            messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
+            message_serializer = serializers.MessageSerializer(messages, many=True)
+            chat_serializer = serializers.ChatSerializer(chat)
+            chat_data.append({
+                "chat": chat_serializer.data,
+                "messages": message_serializer.data,
+            })
+        
+        return Response(chat_data, status=status.HTTP_200_OK)
+
+
+class FreelancerChatListView(generics.GenericAPIView):
+    """View to retrieve all chats and messages for a specific client"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        freelancer_id = request.query_params.get('freelancer_id')
+        
+        if not freelancer_id:
+            return Response({"error": "Freelancer ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Filter chats by client_id
+        chats = models.Chat.objects.filter(freelancer__id=freelancer_id)
+        
+        if not chats.exists():
+            return Response({"error": "No chats found for this freelancer."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serialize the chats
+        chat_data = []
+        for chat in chats:
+            messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
+            message_serializer = serializers.MessageSerializer(messages, many=True)
+            chat_serializer = serializers.ChatSerializer(chat)
+            chat_data.append({
+                "chat": chat_serializer.data,
+                "messages": message_serializer.data,
+            })
+        
+        return Response(chat_data, status=status.HTTP_200_OK)
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -557,12 +702,21 @@ def unread_message_count(request):
     else:
         return Response({'detail': 'User not associated with a client or freelancer profile.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    unread_count = models.Message.objects.filter(chat__in=chats, read=False).count()
-    
-    # Serialize the response
-    data = {'count': unread_count}
-    serializer = MessageCountSerializer(data)
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    # Filter for unread messages that were not sent by the current user
+    unread_messages = models.Message.objects.filter(chat__in=chats, read=False).exclude(sender=user)
+
+    # Count unread messages
+    unread_count = unread_messages.count()
+
+    # Optionally, if you want to return the actual unread messages
+    # unread_message_data = serializers.MessageSerializer(unread_messages, many=True).data
+
+    # Serialize the response with count and message details
+    data = {
+        'count': unread_count,
+    }
+
+    return Response(data, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -601,6 +755,8 @@ def reset_password(request, uidb64, token):
 
 
 class PasswordResetRequestView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
     def post(self, request, *args, **kwargs):
         serializer = serializers.PasswordResetRequestSerializer(data=request.data)
         if serializer.is_valid():
@@ -617,6 +773,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
     """Viewset for managing notifications"""
     serializer_class = serializers.NotificationSerializer
     queryset = models.Notification.objects.all()
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
@@ -625,10 +782,176 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(user=user)
 
 class PasswordChangeView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         serializer = serializers.PasswordChangeSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({'detail': 'Password has been updated successfully.'}, status=status.HTTP_200_OK)
+    
+
+class SelectAppointmentDateView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    def get_object(self):
+        """Retrieve and return the authenticated freelancer"""
+        if models.Freelancer.objects.filter(id= self.request.user.id).exists():
+            return models.Freelancer.objects.get(id=self.request.user.id)
+        elif models.Interviewer.objects.filter(id= self.request.user.id).exists():
+            return models.Interviewer.objects.get(id=self.request.user.id)
+        else:
+            return None
+    def post(self, request):
+        instance = self.get_object()  # Get the current freelancer instance
+        appointment_id = request.data.get('appointment_id')
+        selected_date = request.data.get('date')
+        interviewer_id = request.data.get('interviewer_id')
+
+        print("appointment_id:", appointment_id)
+        print("date:", selected_date)
+        print("interviewer_id:", interviewer_id)
+
+        # Ensure all required fields are provided
+        if not appointment_id or not selected_date or not interviewer_id:
+            return Response({
+                'error': 'Appointment ID, date, and interviewer ID are required.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            print("Attempting to fetch appointment...")
+            appointment = models.Appointment.objects.get(pk=UUID(appointment_id))
+            print("Appointment found:", appointment)
+
+            print("Attempting to fetch interviewer...")
+            interviewer = models.Interviewer.objects.get(pk=UUID(interviewer_id))
+            print("Interviewer found:", interviewer)
+
+                # Update the appointment with the selected date
+            appointment.appointment_date = selected_date
+            appointment.save()
+
+            # Create FreelancerInterview instance
+            freelancer_interview = models.FreelancerInterview.objects.create(
+                interviewer=interviewer,
+                freelancer=appointment.freelancer,
+                appointment=appointment,
+                passed=False,  # Initial state is not passed
+                done=False  # Initial state is not done
+            )
+           # Assuming appointment.appointment_date is a string in ISO 8601 format
+            appointment_date_str = appointment.appointment_date  # e.g., "2024-10-24T09:17:00.000Z"
+
+            # Parse the string into a datetime object
+            appointment_date = datetime.fromisoformat(appointment_date_str[:-1])  # Remove the 'Z' for UTC
+
+            # Format the date into a more readable form
+            formatted_date = appointment_date.strftime("%B %d, %Y at %H:%M %p")
+
+            models.Notification.objects.create(
+                    user=instance,
+                    type='alert',
+                    title=f"Interview Appointment selection successful",
+                    description=f"you have selected your appointment date for {appointment.category} interview on {formatted_date}",
+            )
+            models.Notification.objects.create(
+                    user=appointment.freelancer,
+                    type='alert',
+                    title=f"Interview Appointment Date for {appointment.category} changed! ",
+                    description=f"your appointment date for {appointment.category} interview has been chagned to {formatted_date}",
+            )
+            updateAppointmentDateOptions(freelancer_interview)
+            return Response({
+                'message': 'Appointment date and interview created successfully',
+                'interview_id': str(freelancer_interview.id)
+            }, status=status.HTTP_201_CREATED)
+
+        except models.Appointment.DoesNotExist:
+            return Response({'error': 'Appointment not found'}, status=status.HTTP_404_NOT_FOUND)
+        except models.Interviewer.DoesNotExist:
+            return Response({'error': 'Interviewer not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def updateAppointmentDateOptions(freelancer_interview):
+    try:
+        interviews = models.FreelancerInterview.objects.filter(interviewer=freelancer_interview.interviewer)
+        for interview in interviews:
+            available_interviewers = get_available_interviewers(interview.appointment.category)
+            if available_interviewers:
+                print("trying to get available appointment dates...")
+                # Generate appointment date options for available interviewers
+                appointment_date_options = generate_appointment_date_options(available_interviewers)
+                print("available appointment dates found", appointment_date_options)
+                print("appointment id is ", interview.appointment.id)
+                
+                # Convert interviewer_id UUIDs to strings
+                appointment_date_options_serializable = [
+                    {
+                        'interviewer_id': str(option['interviewer_id']),
+                        'date': option['date']
+                    } for option in appointment_date_options
+                ]
+                print("serializable appointment_date_options:", appointment_date_options_serializable)
+    
+                # Assign the serializable data
+                appointment = models.Appointment.objects.get(pk=interview.appointment.id)
+                appointment.appointment_date_options = appointment_date_options_serializable       
+                appointment.save()
+                print("appointment is saved ")
+    except Exception as e:
+        print(f"Error in updateAppointmentDateOptions: {e}")
+        raise
+
+
+class VerifyFreelancerSkillsView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]  # Ensure only interviewers can access
+
+    def post(self, request):
+        # Check if the user is an interviewer
+        if not models.Interviewer.objects.filter(id=request.user.id).exists():
+            raise PermissionDenied("You do not have permission to verify skills.")
+
+        # Get passed skills, category, and freelancer ID from the request data
+        passed_skills = request.data.get("skills_passed", [])
+        category = request.data.get("category", None)
+        freelancer_id = request.data.get("freelancer_id", None)
+
+        if not passed_skills or not category or not freelancer_id:
+            return Response(
+                {"detail": "Both 'skills_passed', 'category', and 'freelancer_id' are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Retrieve the freelancer
+        freelancer = get_object_or_404(models.Freelancer, id=freelancer_id)
+
+        # Parse freelancer skills from the JSON field
+        try:
+            freelancer_skills = json.loads(freelancer.skills) or []
+        except json.JSONDecodeError:
+            return Response(
+                {"detail": "Invalid format for freelancer skills."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated_skills = []
+
+        # Loop through the freelancer's skills to update the verified field
+        for skill in freelancer_skills:
+            if isinstance(skill, dict):
+                if skill.get("category") == category and skill.get("skill") in passed_skills:
+                    skill["verified"] = True  # Mark the skill as verified
+            updated_skills.append(skill)
+
+        # Update the freelancer's skills
+        freelancer.skills = json.dumps(updated_skills)  # Serialize back to JSON string
+        freelancer.save()
+
+        return Response(
+            {"detail": "Skills have been successfully updated."},
+            status=status.HTTP_200_OK,
+        )

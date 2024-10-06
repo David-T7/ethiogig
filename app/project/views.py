@@ -63,7 +63,7 @@ class FreelancerProjectViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
-class MilestoneViewSet(viewsets.ModelViewSet):
+class MilestoneListViewSet(generics.ListAPIView):
     """View for managing milestones"""
     queryset = models.Milestone.objects.all()
     serializer_class = serializers.MilestoneSerializer
@@ -71,19 +71,29 @@ class MilestoneViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """Filter milestones to only include those related to the authenticated user's contracts"""
-        user = self.request.user
-        if hasattr(user, 'client'):
-            return self.queryset.filter(contract__client=user.client)
-        elif hasattr(user, 'freelancer'):
-            return self.queryset.filter(contract__freelancer=user.freelancer)
-        else:
-            return self.queryset.none()
+        contract_id = self.kwargs.get('contract_id')
+        return models.Milestone.objects.filter(contract_id=contract_id)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def perform_create(self, serializer):
-        contract_id = self.kwargs.get('contract_pk')
-        contract = generics.get_object_or_404(models.Contract, pk=contract_id)
-        serializer.save(contract=contract)
+class CounterOfferMilestoneListViewSet(generics.ListAPIView):
+    """View for managing milestones related to a specific counter offer."""
+    serializer_class = serializers.CounterOfferMilestoneSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        counter_offer_id = self.kwargs.get('counter_offer_id')
+        return models.CounterOfferMilestone.objects.filter(counter_offer_id=counter_offer_id)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class ContractViewSet(viewsets.ModelViewSet):
     """Viewset for managing contracts between client and freelancer"""
@@ -106,9 +116,11 @@ class ContractViewSet(viewsets.ModelViewSet):
         if 'freelancer_accepted_terms' in request.data:
             raise PermissionDenied("You do not have permission to update freelancer_accepted_terms.")
 
+        if not models.Client.objects.contains(pk= request.user.id):
+            raise PermissionDenied("You do not have permission to update this contract.")
         if request.user.client != instance.client:
             raise PermissionDenied("You do not have permission to update this contract.")
-
+        
         if 'status' in request.data and request.data['status'] == 'active':
             escrows = models.Escrow.objects.filter(contract = instance)
             if escrows.__len__()>0:
@@ -145,7 +157,7 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
         """Block PUT method to prevent full updates"""
         raise MethodNotAllowed("PUT method not allowed. Please use PATCH for partial updates.")
 
-class FreelancerContractListViewSet(generics.ListAPIView):
+class FreelancerContractListViewSet(viewsets.ModelViewSet):
     """Viewset for listing contracts associated with the authenticated freelancer"""
     queryset = models.Contract.objects.all()
     serializer_class = serializers.ContractSerializer
@@ -156,34 +168,129 @@ class FreelancerContractListViewSet(generics.ListAPIView):
         """Retrieve and return the contracts for the authenticated freelancer"""
         return models.Contract.objects.filter(freelancer=self.request.user.freelancer)
 
+class CounterOfferViewSet(viewsets.ModelViewSet):
+    queryset = models.CounterOffer.objects.all()
+    serializer_class = serializers.CounterOfferSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        # Automatically set the sender to the requesting user
+        serializer.save(sender=self.request.user)
+
+    def get_queryset(self):
+        """
+        Optionally restricts the returned counter offers to a given user.
+        """
+        user = self.request.user
+        return models.CounterOffer.objects.filter(sender=user)  # Adjust this filter to include contracts related to the user as needed
+
+
+
+class MileStoneViewSet(viewsets.ModelViewSet):
+    """Viewset for managing disputes between client and freelancer"""
+    queryset = models.Milestone.objects.all()
+    serializer_class = serializers.MilestoneSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+class CounterOfferMileStoneViewSet(viewsets.ModelViewSet):
+    """Viewset for managing disputes between client and freelancer"""
+    queryset = models.CounterOfferMilestone.objects.all()
+    serializer_class = serializers.CounterOfferMilestoneSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+class CounterOfferViewSet(viewsets.ViewSet):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request, contract_id=None):
+        """
+        This method handles GET requests to retrieve all counter offers related to a specific contract.
+        """
+        counter_offers = models.CounterOffer.objects.filter(contract_id=contract_id)
+        serializer = serializers.CounterOfferSerializer(counter_offers, many=True)
+        return Response(serializer.data)
+
+class MilestoneByProjectView(generics.ListAPIView):
+    """View to return milestones based on project_id"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = serializers.MilestoneSerializer
+
+    def get_queryset(self):
+        # Get project_id from the URL kwargs
+        project_id = self.kwargs.get('project_id')
+
+        # Filter contracts by project_id
+        contracts = models.Contract.objects.filter(project_id=project_id)
+
+        # Return milestones related to the contracts of the given project
+        return models.Milestone.objects.filter(contract__in=contracts)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"detail": "No milestones found for the given project."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class CounterOfferView(viewsets.ModelViewSet):
+    """Viewset for managing disputes between client and freelancer"""
+    queryset = models.CounterOffer.objects.all()
+    serializer_class = serializers.CounterOfferSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
 class DisputeViewSet(viewsets.ModelViewSet):
     """Viewset for managing disputes between client and freelancer"""
     queryset = models.Dispute.objects.all()
     serializer_class = serializers.DisputeSerializer
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def perform_create(self, serializer):
         """Create a dispute, setting the client, freelancer, and created_by fields automatically"""
-        contract = serializer.validated_data['contract']
-        if self.request.user.client == contract.client:
+        contract = serializer.validated_data.get('contract')
+        milestone = serializer.validated_data.get('milestone', None)
+        user = self.request.user
+
+        # Determine if the user is a client or freelancer associated with the contract
+        if user.client == contract.client:
             dispute = serializer.save(
-                client=self.request.user.client,
+                client=user.client,
                 freelancer=contract.freelancer,
-                created_by=self.request.user,
+                created_by=user,
             )
-        elif self.request.user.freelancer == contract.freelancer:
+        elif user.freelancer == contract.freelancer:
             dispute = serializer.save(
                 client=contract.client,
-                freelancer=self.request.user.freelancer,
-                created_by=self.request.user,
+                freelancer=user.freelancer,
+                created_by=user,
             )
+      
         else:
             raise PermissionDenied("You do not have permission to create a dispute for this contract.")
-
+        if milestone:
+            milestone.status = "inDispute"
+            milestone.save()
+        else:
+            contract.status = "inDispute"
+            contract.save()
         # Handle supporting documents
         supporting_documents_data = self.request.FILES.getlist('supporting_documents')
         for doc in supporting_documents_data:
-            supporting_document = models.SupportingDocument.objects.create(file=doc , uploaded_by=self.request.user , dispute=dispute)
+            supporting_document = models.SupportingDocument.objects.create(
+                file=doc,
+                uploaded_by=user,
+                dispute=dispute
+            )
             dispute.supporting_documents.add(supporting_document)
 
     def update(self, request, *args, **kwargs):
@@ -196,10 +303,71 @@ class DisputeViewSet(viewsets.ModelViewSet):
         if 'supporting_documents' in request.FILES:
             supporting_documents_data = request.FILES.getlist('supporting_documents')
             for doc in supporting_documents_data:
-                supporting_document = models.SupportingDocument.objects.create(file=doc)
+                supporting_document = models.SupportingDocument.objects.create(
+                    file=doc,
+                    uploaded_by=request.user,
+                    dispute=instance
+                )
                 instance.supporting_documents.add(supporting_document)
 
         return super().update(request, *args, **kwargs)
+
+
+class DisputeListView(generics.ListAPIView):
+    """
+    This view returns a list of disputes associated with a contract
+    """
+    serializer_class = serializers.DisputeSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        contract_id = self.kwargs.get('contract_id')
+        return models.Dispute.objects.filter(contract_id=contract_id)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"detail": "No disputes found for this contract."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class CancelDisputeView(APIView): 
+    def patch(self, request, dispute_id):
+        try:
+            # Get the dispute by ID
+            print("Dispute ID is", dispute_id)
+            dispute = models.Dispute.objects.get(id=dispute_id)
+
+            # Update the dispute status to resolved
+            dispute.status = 'resolved'
+            dispute.save()
+            
+            # Get the associated milestone or contract
+            if dispute.milestone:
+                milestone = dispute.milestone
+                milestone.status = 'active'
+                milestone.save()
+            elif dispute.contract:  # Added check to handle cases where there is no milestone
+                contract = dispute.contract
+                contract.status = 'active'
+                contract.save()
+            else:
+                return Response({'error': 'No milestone or contract associated with this dispute'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Return success response
+            return Response({'success': "Dispute Canceled"}, status=status.HTTP_200_OK)
+
+        except models.Dispute.DoesNotExist:
+            return Response({'error': 'Dispute not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 
 class EscrowViewSet(viewsets.ModelViewSet):
     """Viewset for managing escrows"""

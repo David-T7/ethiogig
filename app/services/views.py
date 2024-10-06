@@ -23,21 +23,61 @@ from rest_framework.exceptions import PermissionDenied
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 class FreelancerSearchView(APIView):
-
+    
     def get(self, request, *args, **kwargs):
-        tech_stack = request.query_params.getlist('tech_stack')
         working_preference = request.query_params.get('working_preference')
         project_duration = request.query_params.get('project_duration')
         project_budget = request.query_params.get('project_budget')
         project_description = request.query_params.get('project_description')
-
         freelancers = Freelancer.objects.all()
+        tech_stack_json = request.query_params.get('tech_stack')
+        
+        # Attempt to parse the JSON string
+        tech_stack = json.loads(tech_stack_json) if tech_stack_json else []
 
+        print("tech stack", tech_stack)
+        print("project description", project_description)
         ranked_freelancers = []
+        
         for freelancer in freelancers:
-            skill_matches = len(set(freelancer.skills) & set(tech_stack)) if tech_stack else 0
+            # Initialize an empty list for verified skills
+            verified_skills = []
+
+            # Check if freelancer.skills is not empty and try to parse the JSON string
+            if freelancer.skills:
+                try:
+                    # Parse the JSON string into a Python object
+                    skills_data = json.loads(freelancer.skills)
+
+                    # Check if it's a list
+                    if isinstance(skills_data, list):
+                        # Extract verified skills from the list of dictionaries
+                        verified_skills = [
+                            skill['skill'].lower() for skill in skills_data
+                            if isinstance(skill, dict) and skill.get("verified", False) and skill['skill'].lower() not in verified_skills
+                        ]
+
+                    # Check if it's a dictionary (though based on your description it should be a list)
+                    elif isinstance(skills_data, dict):
+                        if skills_data.get("verified", False):
+                            skil_name = skills_data.get('skill').lower()
+                            if skil_name not in verified_skills :verified_skills.append(skills_data.get('skill').lower())
+
+                except json.JSONDecodeError:
+                    print(f"Error parsing skills JSON for freelancer {freelancer.full_name}")
+            
+            print("verified skills", verified_skills)
+
+            # Extract tech stack skills and convert them to lowercase
+            tech_stack_skills = [skill.lower() for skill in tech_stack]
+
+            # Perform case-insensitive matching
+            skill_matches = len(set(verified_skills) & set(tech_stack_skills)) if tech_stack else 0
+            print("skill match length", skill_matches)
+            print("working preference is ",working_preference)
             if skill_matches > 0:
-                if working_preference and freelancer.preferred_working_hours != working_preference:
+                if working_preference != "I'll decide later" and freelancer.preferred_working_hours != working_preference:
+                    print("skipped....")
                     continue
 
                 score = self.evaluate_freelancer(
@@ -60,12 +100,35 @@ class FreelancerSearchView(APIView):
             'freelancers': serializer.data,
         })
     def evaluate_freelancer(self, freelancer, position_applied_for, project_duration, project_budget):
+        # Extract skill names from dictionaries
+        skills = []
+        if freelancer.skills:
+            try:
+                # Parse skills JSON if stored as a string
+                skills_data = json.loads(freelancer.skills)
+                if isinstance(skills_data, list):
+                    skills = [skill['skill'] for skill in skills_data if 'skill' in skill]
+                elif isinstance(skills_data, dict):
+                    skills = [skills_data.get('skill')]
+            except json.JSONDecodeError:
+                print(f"Error parsing skills JSON for freelancer {freelancer.full_name}")
+
+        # Extract certification names from dictionaries
+        certifications = []
+        if freelancer.certifications:
+            try:
+                # Assuming certifications is a list of dicts
+                certifications = [cert.get('name') for cert in freelancer.certifications if 'name' in cert]
+            except Exception as e:
+                print(f"Error processing certifications for freelancer {freelancer.full_name}: {e}")
+
+        # Build the resume text
         resume_text = f"""
         Name: {freelancer.full_name}
         Title: {freelancer.professional_title}
-        Skills: {', '.join(freelancer.skills)}
+        Skills: {', '.join(skills)}
         Experience: {freelancer.experience} years
-        Certifications: {', '.join(freelancer.certifications)}
+        Certifications: {', '.join(certifications)}
         Portfolio: {freelancer.portfolio}
         Previous Work Experience: {freelancer.prev_work_experience}
         """
