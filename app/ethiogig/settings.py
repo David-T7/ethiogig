@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'services',
     'corsheaders',
     'interview',
+    'assessment',
 ]
 
 MIDDLEWARE = [

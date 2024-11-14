@@ -18,6 +18,7 @@ from django.db.models import F
 from datetime import timedelta
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied
+from rest_framework import generics
 
 # Configure the API key for generative AI
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
@@ -173,6 +174,28 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Services.objects.all()
     serializer_class = ServicesSerializer
     permission_classes = [AllowAny]  # Allow access to everyone
+
+
+class ServicesByFieldView(generics.ListAPIView):
+    serializer_class = ServicesSerializer
+
+    def get_queryset(self):
+        # Get field_id from query parameters
+        field_id = self.request.query_params.get('field_id')
+        if field_id:
+            return Services.objects.filter(field_id=field_id)
+        return Services.objects.none()  # Return empty if no field_id is provided
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"message": "No services available for the selected field"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
 
 class SkillSearchViewSet(viewsets.ViewSet):
     """

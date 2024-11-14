@@ -32,6 +32,10 @@ import json
 from django.core.serializers.json import DjangoJSONEncoder
 from datetime import timedelta, datetime
 from rest_framework.exceptions import PermissionDenied
+from django.contrib.auth import get_user_model
+
+
+
 def get_tokens_for_user(user):
     """Generate JWT tokens for a user"""
     refresh = RefreshToken.for_user(user)
@@ -51,7 +55,7 @@ class LoginView(APIView):
         email = request.data.get('email')
         password = request.data.get('password')
         user = authenticate(request, email=email, password=password)
-        print("user is ",user)
+
         if user is not None:
             # Generate tokens using SimpleJWT
             refresh = RefreshToken.for_user(user)
@@ -60,7 +64,7 @@ class LoginView(APIView):
                 'access': str(refresh.access_token),
             }
 
-            # Determine user role (Freelancer or Client)
+            # Determine user role (Freelancer, Client, Interviewer, Dispute Manager)
             role = None
             if models.Freelancer.objects.filter(id=user.id).exists():
                 role = 'freelancer'
@@ -68,17 +72,27 @@ class LoginView(APIView):
                 role = 'client'
             elif models.Interviewer.objects.filter(id=user.id).exists():
                 role = 'interviewer'
+            elif models.DisputeManager.objects.filter(id=user.id).exists():
+                role = 'dispute-manager'
+            
+            # Check if there's an unfinished assessment if the user is a freelancer
+            assessment_incomplete = False
+            if role == 'freelancer':
+                assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
             
             # Prepare response data
             data = {
                 'token': token,
                 'email': user.email,
                 'role': role,
+                'assessment': assessment_incomplete
             }
-
+            print("data is ",data)
+            
             return Response(data, status=status.HTTP_200_OK)
-
-        return Response({'detail': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Return error if authentication failed
+        return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
 class UserRoleView(APIView):
     """
@@ -88,7 +102,7 @@ class UserRoleView(APIView):
 
     def get(self, request):
         # Extract the user role from the request.user object
-        print("in role get")
+        print("Received request with data:", request.data)
         user = request.user
         print("user is ",user)
         if models.Freelancer.objects.filter(id=user.id).exists():
@@ -97,9 +111,39 @@ class UserRoleView(APIView):
             role = 'client'
         elif models.Interviewer.objects.filter(id=user.id).exists():
             role = 'interviewer'
+        elif models.DisputeManager.objects.filter(id=user.id).exists():
+            role = 'dispute-manager'
         else:
             role = 'Admin'
-        return Response({'role': role}, status=status.HTTP_200_OK)
+        # Check if there's an unfinished assessment if the user is a freelancer
+        assessment_incomplete = False
+        if role == 'freelancer':
+                assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
+        return Response({'role': role , 'assessment':assessment_incomplete}, status=status.HTTP_200_OK)
+
+class UserTypeView(APIView):
+    """
+    View to return the user type based on the provided user ID.
+    """
+    
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({"error": "User ID not provided"}, status=status.HTTP_400_BAD_REQUEST)
+        print("******* user id is ********",user_id)
+        # Check user type based on the ID
+        if models.DisputeManager.objects.filter(id=str(user_id)).exists():
+            user_type = "dispute-manager"
+        elif models.Client.objects.filter(id=str(user_id)).exists():
+            user_type = "client"
+        elif models.Freelancer.objects.filter(id=str(user_id)).exists():
+            user_type = "freelancer"
+        elif models.Interviewer.objects.filter(id=str(user_id)).exists():
+            user_type = "interviewer"
+        else:
+            user_type = "Unknown"  # Default if no specific type is found
+        
+        return Response({"user_type": user_type}, status=status.HTTP_200_OK)
 
 
 
@@ -441,10 +485,6 @@ def generate_appointment_date_options(interviewers):
 
         return date_options
 
-
-
-
-
 class ManageClientView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated client"""
     serializer_class = serializers.ClientSerializer
@@ -456,7 +496,7 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
         return models.Client.objects.get(id=self.request.user.id)
 
 class ManageInterviewerView(generics.RetrieveUpdateAPIView):
-    """Manage the authenticated client"""
+    """Manage the authenticated interviewer"""
     serializer_class = serializers.InterviewerSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -464,6 +504,17 @@ class ManageInterviewerView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         """Retrieve and return the authenticated interviewer"""
         return models.Interviewer.objects.get(id=self.request.user.id)
+    
+
+class ManageDisputeMangerView(generics.RetrieveUpdateAPIView):
+    """Manage the authenticated dispute manager"""
+    serializer_class = serializers.DisputeManagerSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        """Retrieve and return the authenticated dispute manager"""
+        return models.DisputeManager.objects.get(id=self.request.user.id)
 
 
 

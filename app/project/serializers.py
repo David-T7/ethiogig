@@ -21,6 +21,7 @@ class ContractSerializer(serializers.ModelSerializer):
             'id',
             'project',
             'freelancer',
+            'client',
             'title',
             'terms',
             'start_date',
@@ -29,6 +30,7 @@ class ContractSerializer(serializers.ModelSerializer):
             'freelancer_accepted_terms',
             'status',
             'payment_status',
+            'contract_update',
             'created_at',
             'milestone_based',
             'updated_at'
@@ -45,8 +47,8 @@ class ContractSerializer(serializers.ModelSerializer):
 class MilestoneSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Milestone
-        fields = ['id', 'contract', 'title', 'description', 'amount', 'due_date', 'is_completed', 'created_at', 'updated_at' , 'status']
-        read_only_fields = ['id', 'created_at', 'updated_at','status']
+        fields = ['id', 'contract', 'title', 'description', 'amount', 'due_date', 'is_completed','milestone_update','created_at', 'updated_at' , 'status']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 
@@ -88,8 +90,8 @@ class CounterOfferMilestoneSerializer(serializers.ModelSerializer):
 class SupportingDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.SupportingDocument
-        fields = ('id', 'file', 'uploaded_at', 'dispute')
-        read_only_fields = ('uploaded_at', 'dispute')
+        fields = ('id', 'file', 'uploaded_at', 'dispute','uploaded_by')
+        read_only_fields = ('uploaded_at',)
 
 
 class DisputeSerializer(serializers.ModelSerializer):
@@ -104,10 +106,37 @@ class DisputeSerializer(serializers.ModelSerializer):
             'contract',
             'status',
             'created_at',
+            'created_by',
             'milestone',
             'updated_at',
             'response_deadline',
-            'auto_resolved',
+            'supporting_documents',
+            'got_response'
+        )
+        read_only_fields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'response_deadline',
+        ]
+
+class DisputeResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.DisputeResponse
+        fields = (
+            'id',
+            'title',
+            'description',
+            'return_type',
+            'return_amount',
+            'dispute',
+            'response',
+            'created_at',
+            'created_by',
+            'updated_at',
+            'response_deadline',
+            'supporting_documents',
+            'got_response'
         )
         read_only_fields = [
             'id',
@@ -115,8 +144,44 @@ class DisputeSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'response_deadline',
-            'auto_resolved',
         ]
+
+class DRCFowrwardSerializer(serializers.ModelSerializer):
+     class Meta:
+        model = models.DrcForwardedDisputes
+        fields = (
+        'id',
+        'dispute', 
+        'dispute_manager',
+        'solved', 
+        'created_at', 
+        'updated_at'
+        )
+        read_only_fields = [ 
+        'id',
+        'created_at',
+        'updated_at'
+        ]
+
+
+class DrcResolvedDisputesSerializer(serializers.ModelSerializer):
+     class Meta:
+        model = models.DrcResolvedDisputes
+        fields = (
+        'id',
+        'drc_forwarded', 
+        'return_type',
+        'return_amount',
+        'title',
+        'comment',
+        'created_at', 
+        'winner'
+        )
+        read_only_fields = [ 
+        'id',
+        'created_at',
+        ]
+
 
 
 class EscrowSerializer(serializers.ModelSerializer):

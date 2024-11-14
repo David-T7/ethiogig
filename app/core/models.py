@@ -68,9 +68,7 @@ class Freelancer(User):
     languages_spoken = models.JSONField(default=list, blank=True, null=True)
     selected_payment_method = models.JSONField(default=list, blank=True, null=True)
     verified = models.BooleanField(default=False, blank=True, null=True)
-    
     REQUIRED_FIELDS = ['full_name']
-
     def __str__(self):
         return self.full_name
 
@@ -78,7 +76,32 @@ class Freelancer(User):
         if self.contracts.exists():
             raise ValidationError("Cannot delete freelancer who is involved in a project.")
         super().delete(*args, **kwargs)
-        
+
+
+class FullAssessment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    freelancer = models.ForeignKey('Freelancer', on_delete=models.SET_NULL, null=True)
+    finished = models.BooleanField(default=False)
+    soft_skills_assessment = models.BooleanField(default=False)
+    depth_skill_assessment = models.BooleanField(default=False)
+    applied_positions = models.ManyToManyField('Services')
+    live_assessment = models.BooleanField(default=False)
+    project_assessment = models.BooleanField(default=False)
+    passed = models.BooleanField(default=False)
+    on_hold = models.BooleanField(default=False)
+    on_hold_duration = models.DurationField(null=True, blank=True)  # Duration field for hold period
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    new_freelancer = models.BooleanField(default=True)
+
+
+
+
+
+
+
+
+
 class Client(User):
     company_name = models.CharField(max_length=255, blank=True )
     contact_person = models.CharField(max_length=255, blank=True )
@@ -98,17 +121,56 @@ class Client(User):
         super().delete(*args, **kwargs)
 
 class Interviewer(User):
+    TYPE = [
+        ('technical', 'Technical'),
+        ('soft_skills', 'Soft Skills'),
+    ]
     full_name = models.CharField(max_length=100)
-    expertise = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True, blank=False)
+    expertise = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True, blank=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     interviews_per_week = models.IntegerField(default=1)
     max_interviews_per_day = models.IntegerField(default=1)
     # New fields for working hours
     working_hours_start = models.TimeField(default=timezone.now)  # Start time of working hours
     working_hours_end = models.TimeField(default=timezone.now)    # End time of working hours
-
+    type = models.CharField(max_length=20, choices=TYPE , default="technical")
     def __str__(self):
-        return f"{self.id} - {self.expertise}"
+        return f"{self.full_name} - {self.expertise}"
+
+
+class DisputeManager(User):
+    full_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    dispute_per_week = models.IntegerField(default=1)
+    def __str__(self):
+        return f"{self.full_name}"
+
+class DrcForwardedDisputes(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dispute = models.ForeignKey('Dispute', on_delete=models.SET_NULL, null=True, blank=False)
+    dispute_manager = models.ForeignKey('DisputeManager', on_delete=models.SET_NULL, null=True, blank=False)
+    solved = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class DrcResolvedDisputes(models.Model):
+    RETURN_CHOICES = [
+        ('full', 'Full Refund'),
+        ('partial', 'Partial Refund'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    drc_forwarded = models.ForeignKey('DrcForwardedDisputes', on_delete=models.SET_NULL, null=True, blank=False)
+    return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
+    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
+    winner = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=False)
+    title = models.CharField(max_length=20 , null=True , blank=True)
+    comment = models.TextField(blank=True , null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+
+
 
 
 class PaymentMethod(models.Model):
@@ -192,6 +254,12 @@ class Contract(models.Model):
         default='draft'
     )
     milestone_based = models.BooleanField(default=False)
+    contract_update = models.ForeignKey(
+        'Contract',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+    )
     payment_status = models.CharField(
         max_length=20,
         choices=[
@@ -235,7 +303,9 @@ class CounterOffer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey(
         Contract,
-        on_delete=models.CASCADE,
+         on_delete=models.SET_NULL,
+         null=True,
+         blank=True,
         related_name='counter_offers'
     )
     title = models.CharField(max_length=255 , null=True , blank=False)
@@ -299,10 +369,17 @@ class Milestone(models.Model):
     is_completed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    milestone_update = models.ForeignKey(
+        'Milestone',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
     status = models.CharField(
         max_length=20,
         choices=[
             ('pending', 'Pending'),
+            ('accepted', 'accepted'),
             ('inDsipute', 'InDispute'),
             ('active', 'Active'),
             ('completed', 'Completed'),
@@ -371,6 +448,7 @@ class Dispute(models.Model):
         ('open', 'Open'),
         ('resolved', 'Resolved'),
         ('auto_resolved', 'Auto Resolved'),
+        ('drc_forwarded' ,'DRC Forwarded' )
     ]
 
     RETURN_CHOICES = [
@@ -391,13 +469,35 @@ class Dispute(models.Model):
     contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True , blank=False)
     milestone = models.ForeignKey(Milestone , on_delete=models.SET_NULL, null=True , blank=False )
     response_deadline = models.DateTimeField(default=default_deadline)
-    auto_resolved = models.BooleanField(default=False)
     supporting_documents = models.ManyToManyField('SupportingDocument', blank=True, related_name='related_disputes')
+    got_response = models.BooleanField(default=False)
 
-    def save(self, *args, **kwargs):
-        if self.auto_resolved:
-            self.status = 'auto_resolved'
-        super().save(*args, **kwargs)
+class DisputeResponse(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    RESPONSE_CHOICES = [
+        ('no_response', 'No Response'),        
+        ('rejected', 'Rejected'),
+        ('accepted', 'Accepted'),
+        ('counter_offer', 'Counter Offer'),
+    ]
+
+    RETURN_CHOICES = [
+        ('full', 'Full Refund'),
+        ('partial', 'Partial Refund'),
+    ]
+
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
+    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=False ,related_name='created_dispute_responses')
+    updated_at = models.DateTimeField(auto_now=True)
+    dispute = models.ForeignKey(Dispute, on_delete=models.SET_NULL, null=True,blank=False, related_name='dispute_responses')
+    response_deadline = models.DateTimeField(default=default_deadline)
+    supporting_documents = models.ManyToManyField('SupportingDocument', blank=True, related_name='related_dispute_responses')
+    got_response = models.BooleanField(default=False)
+    response = models.CharField(max_length=20, choices=RESPONSE_CHOICES, default='no_response')
 
 class SupportingDocument(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -414,7 +514,7 @@ class Resume(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     full_name = models.CharField(max_length=50)
     email = models.EmailField(unique=False)
-    position_applied_for = models.CharField(max_length=100)
+    applied_positions =  models.ManyToManyField("Services")
     resume_file = models.FileField(upload_to='resumes/')
     uploaded_at = models.DateTimeField(auto_now_add=True)
     password = models.CharField(max_length=128 , null=False)  # Password field
@@ -432,13 +532,14 @@ class Resume(models.Model):
 
 class ScreeningResult(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    resume = models.OneToOneField(Resume, on_delete=models.CASCADE)
+    resume = models.ForeignKey("Resume", on_delete=models.SET_NULL , null=True)
     score = models.DecimalField(max_digits=5, decimal_places=2)
+    position = models.ForeignKey("Services",on_delete=models.SET_NULL , null=True)
     passed = models.BooleanField()
     comments = models.TextField()
     screened_at = models.DateTimeField(auto_now_add=True)
     def __str__(self):
-        return "resume screening result for " + self.resume.full_name +f" score :{self.score} passed:{self.passed}"
+        return "resume screening result for " + f" score :{self.score} passed:{self.passed}"
 
 
 class ScreeningConfig(models.Model):
@@ -460,10 +561,17 @@ class Services(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True , null=True)
+    field = models.ForeignKey('Field',on_delete=models.SET_NULL , null=True )
     technologies = models.ManyToManyField(Technology, related_name='services')
     def __str__(self):
         return self.name
 
+class Field(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True , null=True)
+    def __str__(self):
+        return self.name
 class SkillSearch(models.Model):
     skill_name = models.CharField(max_length=100, unique=True)
     search_count = models.PositiveIntegerField(default=0)
@@ -487,9 +595,16 @@ class Notification(models.Model):
 
 
 class Appointment(models.Model):
+    INTERVIEW_TYPE = [
+        ('soft_skills_assessment', 'Soft Skills'),        
+        ('live_assessment', 'Live Assessment'),
+        ('depth_skill_assessment', 'Depth Skill Assessment'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='appointments')
     category = models.CharField(max_length=255)  # Category (e.g., Frontend, Backend, etc.)
+    interview_type = models.CharField(max_length=255 ,choices=INTERVIEW_TYPE, default="soft_skills_assessment")  # Type (e.g., soft_skills, live_assessment, etc.)
     skills_passed = models.JSONField(default=list)  # List of skills passed as a JSON field
     appointment_date = models.DateTimeField(null=True)  # Appointment date
     appointment_date_options = models.JSONField(default=list, blank=True)  # List of appointment date options

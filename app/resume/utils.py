@@ -31,12 +31,15 @@ def extract_text_from_pdf(pdf_path):
     print("Finished extracting")
     return text
 
-def score_resume_with_chatgpt(resume_text, position_applied_for):
+def score_resume_with_chatgpt(resume_text, positions_applied_for):
     """Score a resume using the ChatGPT model."""
-    prompt = f"""
-    You are a hiring expert for top freelancing site. Given the following resume text and the position applied for, please evaluate it based on these criteria and provide a score from 0 to 100 and return comment:
 
-    Position Applied For: {position_applied_for}
+    positions_list = ', '.join(positions_applied_for)  # Create a string of all positions
+
+    prompt = f"""
+    You are a hiring expert for top freelancing sites. Given the following resume text and the positions applied for, please evaluate it based on these criteria and provide a score from 0 to 100 along with a comment for each position:
+
+    Positions Applied For: {positions_list}
 
     Criteria:
     - Relevant Experience: Number of years in the specific field or similar roles.
@@ -48,26 +51,34 @@ def score_resume_with_chatgpt(resume_text, position_applied_for):
     Resume Text:
     {resume_text}
 
-    Score (0-100):
+    For each position, please return the score and a comment in this format:
+    {{
+        "position_name": {{"score": float, "comment": string}},
+        "position_name": {{"score": float, "comment": string}},
+        ...
+    }}
     """
-    prompt += "\nResponse format:\n{\"score\": float, \"comment\": string}"
+    prompt += "\nResponse format:\n{\"position_name\": {\"score\": float, \"comment\": string}}"
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')  # Verify this model name
+        model = genai.GenerativeModel('gemini-1.5-flash')  # Ensure this model name is correct
         response = model.generate_content(prompt)
-        # print("evaluation report ",response.text)
+        
         evaluation_json = parse_json_from_response(response.text)
-        score = evaluation_json.get("score", 0)
-        comment = evaluation_json.get("comment", "")
-        return {'score': score, 'comment': comment}
+        return evaluation_json  # Return the evaluation as is
     except Exception as e:
         print(f"Error scoring resume with AI: {e}")
-        return {'score': 0, 'comment': 'Error occurred during scoring.'}
+        return {'error': 'Error occurred during scoring.'}
+
+
 
 def parse_json_from_response(response_text):
     """Parse JSON from the AI response text."""
+    # Clean up the response text and ensure it's valid JSON format
     json_text = response_text.strip().strip('```json').strip('```').strip()
+
     try:
+        # Attempt to parse the JSON
         return json.loads(json_text)
     except json.JSONDecodeError:
         print(f"Failed to parse JSON from response: {response_text}")
@@ -122,7 +133,7 @@ def send_password_reset_email(user_email):
     )
     print(f"Password reset link sent to {user_email}")
 
-def create_freelancer_from_resume(resume):
+def create_freelancer_from_resume(resume , applied_positions):
     """Create a Freelancer from a passed resume and send a password reset link."""
     user_email = resume.email
 
@@ -149,6 +160,14 @@ def create_freelancer_from_resume(resume):
 
     # Optionally: Send a password reset link if needed
     # ...
+    # First, create the FullAssessment object without assigning applied_positions
+    assessment = models.FullAssessment.objects.create(
+    freelancer=freelancer
+    )
+
+    # Then, assign the many-to-many field using .set()
+    assessment.applied_positions.set(applied_positions)
 
     # Debugging
     print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.email}")
+    return freelancer

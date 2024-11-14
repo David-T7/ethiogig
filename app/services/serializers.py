@@ -14,7 +14,7 @@ class ServicesSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Services
-        fields = ['id', 'name', 'description', 'technologies'] 
+        fields = ['id', 'name', 'description','field','technologies'] 
         read_only_fields = ['id',]
 
 class SkillSearchSerializer(serializers.ModelSerializer):

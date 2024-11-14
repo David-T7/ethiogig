@@ -1,11 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
-from core.models import (User, Freelancer, Client, PaymentMethod, Services, 
-Technology , Notification , Appointment , Interviewer , FreelancerInterview , SkillSearch,
-Chat , Message , Contract , Milestone , Dispute , CounterOffer , CounterOfferMilestone
-
-)
+from core import models
 
 class UserAdmin(BaseUserAdmin):
     # Define the admin page for users
@@ -55,21 +51,26 @@ class ClientAdmin(admin.ModelAdmin):
     search_fields = ('company_name', 'email')
     list_filter = ('verified',)
 
-admin.site.register(User, UserAdmin)
-admin.site.register(Freelancer, FreelancerAdmin)
-admin.site.register(Client, ClientAdmin)
-admin.site.register(PaymentMethod)
-admin.site.register(Services)
-admin.site.register(Technology)
-admin.site.register(Notification)
-admin.site.register(Appointment)
-admin.site.register(Interviewer)
-admin.site.register(FreelancerInterview)
-admin.site.register(SkillSearch)
-admin.site.register(Chat)
-admin.site.register(Message)
-admin.site.register(Contract)
-admin.site.register(Milestone)
-admin.site.register(Dispute)
-admin.site.register(CounterOffer)
-admin.site.register(CounterOfferMilestone)
+admin.site.register(models.User, UserAdmin)
+admin.site.register(models.Freelancer, FreelancerAdmin)
+admin.site.register(models.Client, ClientAdmin)
+admin.site.register(models.PaymentMethod)
+admin.site.register(models.Services)
+admin.site.register(models.Technology)
+admin.site.register(models.Notification)
+admin.site.register(models.Appointment)
+admin.site.register(models.Interviewer)
+admin.site.register(models.FreelancerInterview)
+admin.site.register(models.SkillSearch)
+admin.site.register(models.Chat)
+admin.site.register(models.Message)
+admin.site.register(models.Contract)
+admin.site.register(models.Milestone)
+admin.site.register(models.Dispute)
+admin.site.register(models.CounterOffer)
+admin.site.register(models.CounterOfferMilestone)
+admin.site.register(models.DrcForwardedDisputes)
+admin.site.register(models.DisputeManager)
+admin.site.register(models.DrcResolvedDisputes)
+admin.site.register(models.FullAssessment)
+admin.site.register(models.Field)

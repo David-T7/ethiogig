@@ -48,6 +48,27 @@ class FreelancerInterviewViewSet(viewsets.ModelViewSet):
         # Validate the data
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        notification_description = ""
+        result =""
+        if instance.passed:
+            notification_description = f"Congratulations you have passed the interview round for {instance.appointment.category} !"
+            result = f"Result: Passed"
+        else:
+            notification_description = f"Unforutnately you have not passed the interview round for {instance.appointment.category}!Keep working on your skills and try agian!"
+            result = f"Result: Failed"
+        models.Notification.objects.create(
+                    user=instance.freelancer,
+                    type='alert',
+                    title=f"Interview for {instance.appointment.category} Finished ",
+                    description=notification_description
+            )
+
+        models.Notification.objects.create(
+                    user=instance.interviewer,
+                    type='alert',
+                    title=f"Interview for {instance.appointment.category} with {instance.freelancer.full_name} Finished ",
+                    description=result
+            )
 
         return Response(serializer.data)
 
@@ -114,7 +135,7 @@ class UpdateAppointmentStatusView(generics.UpdateAPIView):
     def update(self, request, *args, **kwargs):
         """Override the update method to set 'done' to True"""
         if not models.Interviewer.objects.filter(id= request.user.id).exists():
-            raise PermissionDenied("You do not have permission to update the interview.")
+            raise PermissionDenied("You do not have permission to update the appointment.")
         appointment = self.get_object()
       
         # Update the appointment with the selected date

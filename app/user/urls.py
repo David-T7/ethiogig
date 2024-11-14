@@ -10,7 +10,6 @@ router.register('freelancer', views.FreelancerViewSet )
 router.register('client', views.ClientViewSet)
 router.register('notifications', views.NotificationViewSet, basename='notification')
 router.register('message', views.MessageViewSet, basename='message')
-
 urlpatterns = [
     path('clientFreelancerChat/', views.ChatBetweenClientFreelancerView.as_view(), name='chat-client-freelancer'),
     path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
@@ -23,6 +22,7 @@ urlpatterns = [
     path('token/authenticate/', views.AuthenticateView.as_view(), name='token_authenticate'),
     path('freelancer/manage/', views.ManageFreelancerView.as_view(), name="manage-freelancer"),
     path('interviewer/manage/', views.ManageInterviewerView.as_view(), name="manage-interviewer"),
+    path('dispute-manager/manage/', views.ManageDisputeMangerView.as_view(), name="manage-dispute-manager"),
     path('client/manage/', views.ManageClientView.as_view(), name="manage-client"),
     path('projects/', views.ManageProjectListView.as_view(), name="get-projects"),
     path('project/<uuid:pk>/', views.ManageProjectDetailView.as_view(), name='project-detail'),
@@ -36,6 +36,7 @@ urlpatterns = [
     path('select-appointment/', views.SelectAppointmentDateView.as_view(), name='select-appointment'),
     path('messages/read/', views.MarkMessagesAsReadView.as_view(), name='mark-messages-as-read'),
     path('verify-skills/', views.VerifyFreelancerSkillsView.as_view(), name='verify-freelnacer-skills'),
+    path('user-type/', views.UserTypeView.as_view(), name='user-type'),
 
     # path('client/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),
     # path('freelancer/<int:pk>/', views.ManageFreelancerDetailView.as_view(), name='freelancer-detail'),

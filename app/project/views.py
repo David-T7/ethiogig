@@ -6,6 +6,11 @@ from rest_framework.exceptions import PermissionDenied, MethodNotAllowed
 from project import serializers
 from core import models
 from rest_framework.views import APIView
+from django.utils import timezone
+from django.db.models import Count, Q, F
+from datetime import timedelta
+from rest_framework import permissions
+
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """View for managing projects of a client"""
@@ -115,9 +120,6 @@ class ContractViewSet(viewsets.ModelViewSet):
 
         if 'freelancer_accepted_terms' in request.data:
             raise PermissionDenied("You do not have permission to update freelancer_accepted_terms.")
-
-        if not models.Client.objects.contains(pk= request.user.id):
-            raise PermissionDenied("You do not have permission to update this contract.")
         if request.user.client != instance.client:
             raise PermissionDenied("You do not have permission to update this contract.")
         
@@ -134,6 +136,15 @@ class ContractViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class ContractListView(generics.RetrieveAPIView):
+    """View for getting the list of contracts"""
+    queryset = models.Contract.objects.all()
+    serializer_class = serializers.ContractSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
 
 class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     """Viewset for updating terms acceptance by freelancer"""
@@ -156,6 +167,76 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     def put(self, request, *args, **kwargs):
         """Block PUT method to prevent full updates"""
         raise MethodNotAllowed("PUT method not allowed. Please use PATCH for partial updates.")
+
+    def patch(self, request, *args, **kwargs):
+        """Handle partial updates and update related milestones if they are pending"""
+        contract = self.get_object()
+        if(not contract.contract_update):
+            contract.status = "accepted"
+            contract.save()
+            serializer = self.get_serializer(contract, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            # Update related milestones' status to 'accepted' if currently 'pending'
+            milestones = models.Milestone.objects.filter(contract=contract, status='pending')
+            for milestone in milestones:
+                milestone.status = 'accepted'
+                milestone.save()
+        else:
+            contract_updated = contract.contract_update
+            contract_updated.amount_agreed = contract.amount_agreed  
+            contract_updated.terms = contract.terms  
+            contract_updated.save()
+            contract.delete()
+            # Update related milestones' status to 'accepted' if currently 'pending'
+            milestones = models.Milestone.objects.filter(contract=contract_updated, status='pending')
+            for milestone in milestones:
+                milestone.status = 'accepted'
+                milestone.save()
+        return Response(status=status.HTTP_200_OK)
+
+
+
+class FreelancerMilestoneViewSet(generics.RetrieveUpdateAPIView):
+    """Viewset for updating terms acceptance by freelancer"""
+    queryset = models.Milestone.objects.all()
+    serializer_class = serializers.MilestoneSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Filter queryset to only include contracts belonging to the authenticated freelancer"""
+        return self.queryset.filter(contract__freelancer=self.request.user.freelancer)
+
+    def get_object(self):
+        """Retrieve and return the contract by ID belonging to the authenticated freelancer"""
+        queryset = self.get_queryset()
+        obj = generics.get_object_or_404(queryset, pk=self.kwargs.get('pk'))
+        self.check_object_permissions(self.request, obj)
+        return obj
+
+    def put(self, request, *args, **kwargs):
+        """Block PUT method to prevent full updates"""
+        raise MethodNotAllowed("PUT method not allowed. Please use PATCH for partial updates.")
+    def patch(self, request, *args, **kwargs):
+        """Handle partial updates and update related milestones if they are pending"""
+        milestone = self.get_object()
+        milestone_update = milestone.milestone_update
+        if(milestone_update):
+            milestone_update.amount = milestone.amount
+            milestone_update.due_date = milestone.due_date
+            milestone_update.title = milestone.title
+            milestone_update.description = milestone.description
+            milestone_update.save()
+            milestone.delete()
+        else:
+            serializer = self.get_serializer(milestone, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        return Response(status=status.HTTP_200_OK)
+
+
 
 class FreelancerContractListViewSet(viewsets.ModelViewSet):
     """Viewset for listing contracts associated with the authenticated freelancer"""
@@ -259,30 +340,51 @@ class DisputeViewSet(viewsets.ModelViewSet):
         """Create a dispute, setting the client, freelancer, and created_by fields automatically"""
         contract = serializer.validated_data.get('contract')
         milestone = serializer.validated_data.get('milestone', None)
+        return_type = serializer.validated_data.get('return_type')
         user = self.request.user
-
+        print("return type is ",return_type)
         # Determine if the user is a client or freelancer associated with the contract
-        if user.client == contract.client:
-            dispute = serializer.save(
-                client=user.client,
-                freelancer=contract.freelancer,
-                created_by=user,
-            )
-        elif user.freelancer == contract.freelancer:
-            dispute = serializer.save(
-                client=contract.client,
-                freelancer=user.freelancer,
-                created_by=user,
-            )
-      
-        else:
-            raise PermissionDenied("You do not have permission to create a dispute for this contract.")
+        try:
+            # Safely retrieve `client` and `freelancer` attributes if they exist
+            user_client = getattr(user, 'client', None)
+            user_freelancer = getattr(user, 'freelancer', None)
+            if user_client and user_client == contract.client:
+                dispute = serializer.save(
+                    client=user_client,
+                    freelancer=contract.freelancer,
+                    created_by=user,
+                )
+            elif user_freelancer and user_freelancer == contract.freelancer:
+                dispute = serializer.save(
+                    client=contract.client,
+                    freelancer=user_freelancer,
+                    created_by=user,
+                )
+            else:
+                raise PermissionError("User is not authorized to create a dispute for this contract.")
+        except PermissionError as e:
+            # Handle the case where the user is neither a client nor a freelancer in this contract
+            print(f"PermissionError: {e}")
+            raise PermissionError("You are not authorized to initiate a dispute for this contract.")
+
+        except Exception as e:
+            # General exception handling
+            print(f"An unexpected error occurred: {e}")
+            raise Exception("An error occurred while creating the dispute. Please try again later.")
         if milestone:
             milestone.status = "inDispute"
             milestone.save()
+            if (return_type == "full"):
+                print("in full milestone",milestone.amount)
+                dispute.return_amount= milestone.amount
+                dispute.save()
         else:
             contract.status = "inDispute"
             contract.save()
+            if (return_type == "full"):
+                print("in full contract",contract.amount_agreed)
+                dispute.return_amount= contract.amount_agreed
+                dispute.save()
         # Handle supporting documents
         supporting_documents_data = self.request.FILES.getlist('supporting_documents')
         for doc in supporting_documents_data:
@@ -295,6 +397,7 @@ class DisputeViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         """Prevent updates to certain fields"""
+        return_type = self.request.data.get('return_type',None)
         instance = self.get_object()
         if 'created_by' in request.data or 'client' in request.data or 'freelancer' in request.data:
             raise PermissionDenied("You do not have permission to update these fields.")
@@ -309,8 +412,129 @@ class DisputeViewSet(viewsets.ModelViewSet):
                     dispute=instance
                 )
                 instance.supporting_documents.add(supporting_document)
+        if return_type and return_type=="full":
+            contract = models.Contract.objects.get(pk = instance.contract.id)
+            milestone = models.Milestone.objects.get(pk = instance.milestone.id)
+            if (milestone):
+                instance.return_amount= milestone.amount
+            else:
+                instance.return_amount= contract.amount_agreed
+            instance.save()
 
+        if 'status' in request.data:
+            print("checking status .....")
+            print("contract id is ",instance.contract.id)
+            contract = models.Contract.objects.get(pk = instance.contract.id)
+            milestone = models.Milestone.objects.get(pk = instance.milestone.id)
+            if (request.data.get('status') == 'resolved'):
+                if (milestone):
+                    milestone.status = "active"
+                    milestone.save()
+                contract.status = "active"
+                contract.save()
         return super().update(request, *args, **kwargs)
+
+class DisputeResponseViewSet(viewsets.ModelViewSet):
+    """Viewset for managing dispute responses between client and freelancer"""
+    queryset = models.DisputeResponse.objects.all()
+    serializer_class = serializers.DisputeResponseSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create a dispute, setting the client, freelancer, and created_by fields automatically"""
+        dispute = serializer.validated_data.get('dispute')
+        dispute_to_respond = self.request.data.get('dispute_response', None)
+        return_type = serializer.validated_data.get('return_type')
+
+        user = self.request.user
+        try:
+            user_client = getattr(user, 'client', None)
+            user_freelancer = getattr(user, 'freelancer', None)
+        # Determine if the user is a client or freelancer associated with the contract
+            if user_client and user_client == dispute.contract.client:
+                new_dispute_response = serializer.save(
+                created_by=user,
+                )
+            elif user_freelancer and user_freelancer == dispute.contract.freelancer:
+                new_dispute_response = serializer.save(
+                created_by=user,
+                )
+      
+            else:
+                raise PermissionDenied("You do not have permission to create a dispute response for this contract.")
+        except PermissionError as e:
+            # Handle the case where the user is neither a client nor a freelancer in this contract
+            print(f"PermissionError: {e}")
+            raise PermissionError("You are not authorized to initiate a dispute for this contract.")
+
+        except Exception as e:
+            # General exception handling
+            print(f"An unexpected error occurred: {e}")
+            raise Exception("An error occurred while creating the dispute response. Please try again later.")
+        if dispute_to_respond:
+            dispute_response_ = models.DisputeResponse.objects.get(pk = dispute_to_respond)
+            dispute_response_.got_response = True
+            dispute_response_.save()
+            if(return_type == "full"):
+                if(dispute_response_.milestone):
+                    new_dispute_response.return_amount = dispute_response_.dispute.milestone.amount
+                else:
+                    new_dispute_response.return_amount = dispute_response_.dispute.contract.amount_agreed
+        else:
+            dispute.contract.got_response = True
+            dispute.contract.save()
+            if(return_type == "full"):
+                if(dispute.milestone):
+                    new_dispute_response.return_amount = dispute.milestone.amount
+                else:
+                    new_dispute_response.return_amount = dispute.contract.amount_agreed
+
+       
+
+            
+        # Handle supporting documents
+        supporting_documents_data = self.request.FILES.getlist('supporting-documents')
+        for doc in supporting_documents_data:
+            dispute = None
+            if dispute_to_respond:
+                dispute = models.DisputeResponse.objects.get(pk = dispute_to_respond)
+            else:
+                dispute = new_dispute_response.dispute
+
+            supporting_document = models.SupportingDocument.objects.create(
+                file=doc,
+                uploaded_by=user,
+                dispute=dispute
+                )
+            new_dispute_response.dispute.supporting_documents.add(supporting_document)
+
+    def update(self, request, *args, **kwargs):
+        """Prevent updates to certain fields"""
+        instance = self.get_object()
+        return_type = self.request.data.get('return_type',None)
+
+        if 'created_by' in request.data or 'client' in request.data or 'freelancer' in request.data:
+            raise PermissionDenied("You do not have permission to update these fields.")
+        if(return_type == "full"):
+            if(instance.dispute.milestone):
+                instance.return_amount = instance.dispute.milestone.amount
+            else:
+                instance.return_amount = instance.dispute.contract.amount_agreed
+
+        # Handle supporting documents update if needed
+        if 'supporting_documents' in request.data:
+            supporting_documents_data = request.data.get('supporting_documents')
+            for doc_id in supporting_documents_data:
+                document_instance = models.SupportingDocument.objects.get(pk=doc_id)
+                instance.supporting_documents.add(document_instance)
+                instance.save()
+             # Optionally remove supporting_documents key from request.data
+            del request.data['supporting_documents']  # Use this line if needed
+        return super().update(request, *args, **kwargs)
+
+
+
 
 
 class DisputeListView(generics.ListAPIView):
@@ -330,6 +554,148 @@ class DisputeListView(generics.ListAPIView):
         if not queryset.exists():
             return Response(
                 {"detail": "No disputes found for this contract."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DisputeResponseListView(generics.ListAPIView):
+    """
+    This view returns a list of dispute responses associated with a contract.
+    """
+    serializer_class = serializers.DisputeResponseSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        contract_id = self.kwargs.get('contract_id')
+        return models.DisputeResponse.objects.filter(dispute__contract_id=contract_id)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"detail": "No dispute responses found for this contract."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class IsDisputeManager(permissions.BasePermission):
+    """
+    Custom permission to allow only dispute managers to perform actions.
+    """
+    
+    def has_permission(self, request, view):
+        # Check if the user is authenticated and is a dispute manager
+        return request.user.is_authenticated and models.DisputeManager.objects.filter(id=request.user.id).exists()
+
+class ResolvedDrcViewSet(viewsets.ModelViewSet):
+    """Viewset for resolving disputes forwarded to drc"""
+    queryset = models.DrcResolvedDisputes.objects.all()
+    serializer_class = serializers.DrcResolvedDisputesSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsDisputeManager]
+
+
+class SupportingDocumentView(viewsets.ModelViewSet):
+    queryset = models.SupportingDocument.objects.all()
+    serializer_class = serializers.SupportingDocumentSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
+    queryset = models.DrcForwardedDisputes.objects.all()
+    serializer_class = serializers.DRCFowrwardSerializer
+
+    def get_least_assigned_manager(self):
+        """Select the dispute manager who has the fewest disputes recently or is eligible based on `dispute_per_week`."""
+        one_week_ago = timezone.now() - timedelta(days=7)
+
+        # Get eligible dispute managers based on their weekly limit
+        eligible_managers = models.DisputeManager.objects.annotate(
+            weekly_assigned_disputes=Count(
+                'drcforwardeddisputes', 
+                filter=Q(drcforwardeddisputes__created_at__gte=one_week_ago)
+            )
+        ).filter(weekly_assigned_disputes__lt=F('dispute_per_week'))
+
+        # Sort by unresolved disputes and earliest resolution times
+        eligible_managers = eligible_managers.annotate(
+            unresolved_disputes=Count(
+                'drcforwardeddisputes', 
+                filter=Q(drcforwardeddisputes__solved=False)
+            )
+        ).order_by('unresolved_disputes', 'drcforwardeddisputes__updated_at')
+
+        return eligible_managers.first()
+
+    def create(self, request, *args, **kwargs):
+        # Get the best-suited dispute manager based on load and recent activity
+        manager = self.get_least_assigned_manager()
+        if not manager:
+            return Response(
+                {"error": "No dispute manager available within the weekly assignment limit."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Prepare data with selected manager
+        data = request.data.copy()
+        data['dispute_manager'] = manager.id
+
+        # Serialize and save the new dispute assignment
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer):
+        """Custom save logic for creating a DRC forwarded dispute."""
+        serializer.save()
+
+
+
+class DisputeManagerDisputesView(generics.ListAPIView):
+    serializer_class = serializers.DRCFowrwardSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Ensure the user is a DisputeManager
+        if not hasattr(self.request.user, 'disputemanager'):
+            raise PermissionDenied("You do not have permission to view these disputes.")
+
+        # Filter disputes for the logged-in dispute manager
+        return models.DrcForwardedDisputes.objects.filter(dispute_manager=self.request.user.disputemanager)
+
+    def list(self, request, *args, **kwargs):
+        # Override list to return a custom response format if needed
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "latest_disputes": serializer.data
+        })
+
+
+class MilestoneDisputeListView(generics.ListAPIView):
+    """
+    This view returns a list of disputes associated with a milestone
+    """
+    serializer_class = serializers.DisputeSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        milestone_id = self.kwargs.get('milestone_id')
+        return models.Dispute.objects.filter(milestone_id=milestone_id)
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"detail": "No disputes found for this milestone."},
                 status=status.HTTP_404_NOT_FOUND
             )
         serializer = self.get_serializer(queryset, many=True)

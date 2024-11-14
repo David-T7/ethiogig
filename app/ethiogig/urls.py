@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/' , include('interview.urls')),
     path('api/' , include('services.urls')),
     path('api/' , include('project.urls')),
+    path('api/' , include('assessment.urls')),
     path('api/user/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('reset-password/<uidb64>/<token>/',views.reset_password, name='reset-password'),
     path('password-reset-request/', views.PasswordResetRequestView.as_view(), name='password-reset-request'),
