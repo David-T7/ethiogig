@@ -66,32 +66,38 @@ class ResumeViewSet(viewsets.ModelViewSet):
         screening_result_serializer = ScreeningResultSerializer(screening_results, many=True)
         response.data['screening_results'] = screening_result_serializer.data
         if (freelancer):
-                available_interviewers = get_available_interviewers("soft_skills")
-                print("avaliable interviewers found",available_interviewers)
+                # available_interviewers = get_available_interviewers("soft_skills")
+                # print("avaliable interviewers found",available_interviewers)
 
-                if available_interviewers:
-                    print("trying to get avaliable appointment dates...")
-                    # Generate appointment date options for available interviewers
-                    appointment_date_options = generate_appointment_date_options(available_interviewers)
-                    print("avaliable appointment dates found",appointment_date_options)
+                # if available_interviewers:
+                #     print("trying to get avaliable appointment dates...")
+                #     # Generate appointment date options for available interviewers
+                #     appointment_date_options = generate_appointment_date_options(available_interviewers)
+                #     print("avaliable appointment dates found",appointment_date_options)
 
-                    # Create an appointment with date options
-                    appointment = models.Appointment.objects.create(
-                        freelancer=freelancer,
-                        interview_type="soft_skills_assessment",
-                        appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
-                    )
-                    appointment.save()
+                #     # Create an appointment with date options
+                #     appointment = models.Appointment.objects.create(
+                #         freelancer=freelancer,
+                #         interview_type="soft_skills_assessment",
+                #         appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
+                #     )
+                #     appointment.save()
                     # Create a notification for the freelancer about the appointment
+                    # notification = models.Notification.objects.create(
+                    # user=freelancer,
+                    # type='appointment_date_choice',
+                    # title=f"Interview Appointment for Soft Skills Assessment",
+                    # description=f"Congratulations, You've passed the resume assessment and passed to the first round Soft Skills Assessment !",
+                    # data={
+                    #     "appointment_id": str(appointment.id),  # Include appointment ID as a string
+                    #     "appointment_date_options": appointment.appointment_date_options  # Include the date options
+                    # }
+                    # Create a notification for the freelancer about the assessment result
                     notification = models.Notification.objects.create(
                     user=freelancer,
-                    type='appointment_date_choice',
-                    title=f"Interview Appointment for Soft Skills Assessment",
+                    type='alert',
+                    title=f"Soft Skills Assessment Passes",
                     description=f"Congratulations, You've passed the resume assessment and passed to the first round Soft Skills Assessment !",
-                    data={
-                        "appointment_id": str(appointment.id),  # Include appointment ID as a string
-                        "appointment_date_options": appointment.appointment_date_options  # Include the date options
-                    }
                     )
         return response
 
@@ -143,7 +149,7 @@ class FullAssessmentUpdateView(APIView):
     permission_classes = [IsAuthenticated]
     def patch(self, request, freelancer_id, format=None):
         user = self.request.user
-        user_interviewer = getattr(user, 'interviewer', None)
+        # user_interviewer = getattr(user, 'interviewer', None)
         try:
             # Retrieve the full assessment for the freelancer
             full_assessment = models.FullAssessment.objects.get(freelancer=freelancer_id)
@@ -151,8 +157,8 @@ class FullAssessmentUpdateView(APIView):
             return Response({"error": "Full assessment not found for the given freelancer."}, status=status.HTTP_404_NOT_FOUND)
 
         # Check if the authenticated user is an interviewer
-        if not user_interviewer:
-            return Response({"error": "You do not have permission to update this assessment."}, status=status.HTTP_403_FORBIDDEN)
+        # if not user_interviewer:
+        #     return Response({"error": "You do not have permission to update this assessment."}, status=status.HTTP_403_FORBIDDEN)
 
         # Serialize the data for update using the existing FullAssessmentSerializer
         serializer = FullAssessmentSerializer(full_assessment, data=request.data, partial=True)

@@ -54,7 +54,7 @@ class Freelancer(User):
     professional_title = models.CharField(max_length=50, blank=True)
     full_name = models.CharField(max_length=30, blank=True)
     bio = models.TextField(blank=True)
-    skills = models.JSONField(default=list, blank=True)
+    skills = models.JSONField(default=list, null=True ,blank=True)
     prev_work_experience = models.JSONField(default=list, blank=True, null=True)
     portfolio = models.JSONField(default=list, blank=True, null=True)
     experience = models.PositiveIntegerField(default=0, blank=True, null=True)
@@ -79,28 +79,27 @@ class Freelancer(User):
 
 
 class FullAssessment(models.Model):
+    status = [
+         ('not_started', 'Not Started'),
+         ('pending', 'Pending'),
+         ('passed', 'Passed'),
+         ('failed','Failed'),
+         ('on_hold','On Hold')
+    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     freelancer = models.ForeignKey('Freelancer', on_delete=models.SET_NULL, null=True)
     finished = models.BooleanField(default=False)
-    soft_skills_assessment = models.BooleanField(default=False)
-    depth_skill_assessment = models.BooleanField(default=False)
     applied_positions = models.ManyToManyField('Services')
-    live_assessment = models.BooleanField(default=False)
-    project_assessment = models.BooleanField(default=False)
+    soft_skills_assessment_status = models.CharField(choices=status , default='not_started')
+    depth_skill_assessment_status = models.CharField(choices=status , default='not_started')
+    live_assessment_status = models.CharField(choices=status , default='not_started')
+    project_assessment_status = models.CharField(choices=status , default='not_started')
     passed = models.BooleanField(default=False)
     on_hold = models.BooleanField(default=False)
     on_hold_duration = models.DurationField(null=True, blank=True)  # Duration field for hold period
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     new_freelancer = models.BooleanField(default=True)
-
-
-
-
-
-
-
-
 
 class Client(User):
     company_name = models.CharField(max_length=255, blank=True )
@@ -603,9 +602,9 @@ class Appointment(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True, related_name='appointments')
-    category = models.CharField(max_length=255)  # Category (e.g., Frontend, Backend, etc.)
+    category = models.CharField(max_length=255 , null=True , blank=True)  # Category (e.g., Frontend, Backend, etc.)
     interview_type = models.CharField(max_length=255 ,choices=INTERVIEW_TYPE, default="soft_skills_assessment")  # Type (e.g., soft_skills, live_assessment, etc.)
-    skills_passed = models.JSONField(default=list)  # List of skills passed as a JSON field
+    skills_passed = models.JSONField(default=list , blank=True)  # List of skills passed as a JSON field
     appointment_date = models.DateTimeField(null=True)  # Appointment date
     appointment_date_options = models.JSONField(default=list, blank=True)  # List of appointment date options
     done = models.BooleanField(default=False)

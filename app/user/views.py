@@ -297,71 +297,71 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
         self.perform_update(serializer)
 
         # Check the freelancer's skills to create an appointment if necessary
-        skills_data = json.loads(instance.skills)
+        # skills_data = json.loads(instance.skills)
 
-        both_practical_theoretical = request.data.get('both_practical_theoretical', False)
-        category_unverified_skills = {}
-        skills_by_category = {}
+        # both_practical_theoretical = request.data.get('both_practical_theoretical', False)
+        # category_unverified_skills = {}
+        # skills_by_category = {}
 
-        for skill in skills_data:
-            category = skill.get('category')
-            skill_type = skill.get('type')
-            is_verified = skill.get('verified', False)
-            skill_name = skill.get('skill')
+        # for skill in skills_data:
+        #     category = skill.get('category')
+        #     skill_type = skill.get('type')
+        #     is_verified = skill.get('verified', False)
+        #     skill_name = skill.get('skill')
 
-            if not is_verified:
-                if category not in skills_by_category:
-                    skills_by_category[category] = {}
-                if skill_name not in skills_by_category[category]:
-                    skills_by_category[category][skill_name] = {'theoretical': False, 'practical': False}
+        #     if not is_verified:
+        #         if category not in skills_by_category:
+        #             skills_by_category[category] = {}
+        #         if skill_name not in skills_by_category[category]:
+        #             skills_by_category[category][skill_name] = {'theoretical': False, 'practical': False}
 
-                skills_by_category[category][skill_name][skill_type] = True
+        #         skills_by_category[category][skill_name][skill_type] = True
 
-        for category, skills in skills_by_category.items():
-            for skill_name, skill_types in skills.items():
-                if both_practical_theoretical:
-                    if skill_types['theoretical'] and skill_types['practical']:
-                        if category not in category_unverified_skills:
-                            category_unverified_skills[category] = []
-                        category_unverified_skills[category].append(skill_name)
-                else:
-                    if skill_types['theoretical'] or skill_types['practical']:
-                        if category not in category_unverified_skills:
-                            category_unverified_skills[category] = []
-                        category_unverified_skills[category].append(skill_name)
+        # for category, skills in skills_by_category.items():
+        #     for skill_name, skill_types in skills.items():
+        #         if both_practical_theoretical:
+        #             if skill_types['theoretical'] and skill_types['practical']:
+        #                 if category not in category_unverified_skills:
+        #                     category_unverified_skills[category] = []
+        #                 category_unverified_skills[category].append(skill_name)
+        #         else:
+        #             if skill_types['theoretical'] or skill_types['practical']:
+        #                 if category not in category_unverified_skills:
+        #                     category_unverified_skills[category] = []
+        #                 category_unverified_skills[category].append(skill_name)
 
-        for category, unverified_skills in category_unverified_skills.items():
-            if len(unverified_skills) >= 1:
-                print("trying to get avaliable interviewers...")
-                # Find interviewers with relevant expertise
-                available_interviewers = get_available_interviewers(category)
-                print("avaliable interviewers found",available_interviewers)
+        # for category, unverified_skills in category_unverified_skills.items():
+        #     if len(unverified_skills) >= 1:
+        #         print("trying to get avaliable interviewers...")
+        #         # Find interviewers with relevant expertise
+        #         available_interviewers = get_available_interviewers(category)
+        #         print("avaliable interviewers found",available_interviewers)
 
-                if available_interviewers:
-                    print("trying to get avaliable appointment dates...")
-                    # Generate appointment date options for available interviewers
-                    appointment_date_options = generate_appointment_date_options(available_interviewers)
-                    print("avaliable appointment dates found",appointment_date_options)
+        #         if available_interviewers:
+        #             print("trying to get avaliable appointment dates...")
+        #             # Generate appointment date options for available interviewers
+        #             appointment_date_options = generate_appointment_date_options(available_interviewers)
+        #             print("avaliable appointment dates found",appointment_date_options)
 
-                    # Create an appointment with date options
-                    appointment = models.Appointment.objects.create(
-                        freelancer=instance,
-                        category=category,
-                        skills_passed=unverified_skills,
-                        appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
-                    )
-                    appointment.save()
-                    # Create a notification for the freelancer about the appointment
-                    notification = models.Notification.objects.create(
-                    user=instance,
-                    type='appointment_date_choice',
-                    title=f"Interview Appointment for {category}",
-                    description=f"Congratulations, You've passed your skills tests and now you are in the final interview round. Please select an interview date from the options given",
-                    data={
-                        "appointment_id": str(appointment.id),  # Include appointment ID as a string
-                        "appointment_date_options": appointment.appointment_date_options  # Include the date options
-                    }
-)
+        #             # Create an appointment with date options
+        #             appointment = models.Appointment.objects.create(
+        #                 freelancer=instance,
+        #                 category=category,
+        #                 skills_passed=unverified_skills,
+        #                 appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
+        #             )
+        #             appointment.save()
+        #             # Create a notification for the freelancer about the appointment
+        #             notification = models.Notification.objects.create(
+        #             user=instance,
+        #             type='appointment_date_choice',
+        #             title=f"Interview Appointment for {category}",
+        #             description=f"Congratulations, You've passed your skills tests and now you are in the final interview round. Please select an interview date from the options given",
+        #             data={
+        #                 "appointment_id": str(appointment.id),  # Include appointment ID as a string
+        #                 "appointment_date_options": appointment.appointment_date_options  # Include the date options
+        #             }
+# )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
