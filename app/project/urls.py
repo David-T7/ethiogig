@@ -43,7 +43,7 @@ urlpatterns = [
     path('projects/<uuid:project_id>/milestones/', views.ProjectMilestonesView.as_view(), name='project-milestones'),
     path('dispute-manager-disputes/',views.DisputeManagerDisputesView.as_view() , name="dispute-manager-disputes") ,   
     path('get-contracts/<uuid:pk>/', views.ContractListView.as_view(), name='contract-list'),
-
+    path('check-active-contract/', views.ActiveContractCheckView.as_view(), name='check-active-contract'),
 ]
 
 

@@ -13,6 +13,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.permissions import BasePermission
+from rest_framework.decorators import api_view
 
 
 from core import models
@@ -101,6 +102,290 @@ class ResumeViewSet(viewsets.ModelViewSet):
                     )
         return response
 
+def addFreelancerSkills(freelancer_id , selected_technologies):
+     # Update freelancer's skills using selectedTechnologies
+        freelancer = models.Freelancer.objects.get(id=freelancer_id)
+        existing_skills = json.loads(freelancer.skills) if freelancer.skills else []
+
+        # Iterate over services and technologies
+        for service_id, technology_ids in selected_technologies.items():
+            # Fetch the service name for the category
+            service = models.Services.objects.get(id=service_id)
+            category = service.name
+
+            for tech_id in technology_ids:
+                # Fetch the technology name for the skill
+                technology = models.Technology.objects.get(id=tech_id)
+                skill_name = technology.name
+
+                # Add practical and theoretical skills for the technology
+                new_skills = [
+                    {
+                        "category": category,
+                        "skill": skill_name,
+                        "type": "practical",
+                        "both_practical_theoretical": True,
+                        "verified": True
+                    },
+                    {
+                        "category": category,
+                        "skill": skill_name,
+                        "type": "theoretical",
+                        "both_practical_theoretical": True,
+                        "verified": True
+                    }
+                ]
+                existing_skills.extend(new_skills)
+
+        # Save the updated skills to the freelancer object
+        freelancer.skills = json.dumps(existing_skills)
+        freelancer.save()
+
+
+@api_view(['PATCH'])
+def activate_full_assessment(request, freelancer_id):
+    try:
+        # Data passed in the request body with applied positions and corresponding statuses
+        modal_data = request.data.get('modalData', None)  # or `modalData` key, depending on structure
+        selected_technologies = request.data.get('selectedTechnologies', {})
+
+        # Iterate over each applied position's ID and its corresponding assessment statuses
+        for position_id, status_data in modal_data.items():
+            try:
+                # Fetch the FullAssessment object for the given position_id and freelancer_id
+                full_assessment = models.FullAssessment.objects.get(
+                    freelancer_id=freelancer_id,
+                    applied_position_id=position_id
+                )
+                
+                # Update the fields with the new statuses
+                full_assessment.soft_skills_assessment_status = status_data.get("soft_skills_assessment_status", full_assessment.soft_skills_assessment_status)
+                full_assessment.depth_skill_assessment_status = status_data.get("depth_skill_assessment_status", full_assessment.depth_skill_assessment_status)
+                full_assessment.live_assessment_status = status_data.get("live_assessment_status", full_assessment.live_assessment_status)
+                
+                # Set the status to 'pending'
+                full_assessment.status = 'pending'
+                
+                # Save the updated FullAssessment object
+                full_assessment.save()
+
+            except models.FullAssessment.DoesNotExist:
+                return Response(
+                    {"detail": f"FullAssessment object not found for position ID {position_id}."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        if (len(selected_technologies.items()) > 0):
+                addFreelancerSkills(freelancer_id , selected_technologies)
+        
+        # After updating all assessments, return a success response
+        # You may choose to return a summary or just a success message
+        return Response({"detail": "Full assessments activated successfully."}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        # Catch any unexpected errors
+        return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@api_view(['PATCH'])
+def approve_freelancer(request, freelancer_id):
+    try:
+        # Parse the data from the request
+        modal_data = request.data.get('modalData', None)
+        selected_technologies = request.data.get('selectedTechnologies', {})
+
+        # Iterate over applied positions to update assessments
+        for position_id, status_data in modal_data.items():
+            try:
+                # Fetch the FullAssessment object for the given position_id and freelancer_id
+                full_assessment = models.FullAssessment.objects.get(
+                    freelancer_id=freelancer_id,
+                    applied_position_id=position_id
+                )
+
+                # Update assessment statuses
+                full_assessment.soft_skills_assessment_status = "passed"
+                full_assessment.depth_skill_assessment_status = "passed"
+                full_assessment.live_assessment_status = "passed"
+                full_assessment.status = "passed"
+                full_assessment.finished = True
+                full_assessment.save()
+            except models.FullAssessment.DoesNotExist:
+                return Response(
+                    {"detail": f"FullAssessment object not found for position ID {position_id}."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        if (len(selected_technologies.items()) > 0):
+            addFreelancerSkills(freelancer_id , selected_technologies)
+        return Response(
+            {"detail": "Full assessments activated and freelancer skills updated successfully."},
+            status=status.HTTP_200_OK
+        )
+
+    except models.Freelancer.DoesNotExist:
+        return Response(
+            {"detail": f"Freelancer with ID {freelancer_id} not found."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except models.Service.DoesNotExist as e:
+        return Response(
+            {"detail": f"Service not found: {str(e)}"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except models.Technology.DoesNotExist as e:
+        return Response(
+            {"detail": f"Technology not found: {str(e)}"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
+
+@api_view(['PATCH'])
+def assign_soft_skills_assessment_appointment(request, freelancer_id):
+    try:
+        # Extract the applied_position_id from the request data
+        modal_data = request.data.get('modalData', None)  # or `modalData` key, depending on structure
+        applied_position_id = list(modal_data.keys())[0]  # Assuming position_id is the first key in the dictionary
+
+        # Get the FullAssessment object for the freelancer and applied position
+        full_assessment = models.FullAssessment.objects.get(
+            freelancer_id=freelancer_id,
+            applied_position_id=applied_position_id
+        )
+
+        # Update the soft_skills_assessment_status field to 'pending'
+        full_assessment.soft_skills_assessment_status = 'pending'
+        full_assessment.save()
+
+        # Find available interviewers for the soft skills assessment
+        available_interviewers = get_available_interviewers("soft_skills")
+        print("Available interviewers found:", available_interviewers)
+
+        if available_interviewers:
+            print("Trying to get available appointment dates...")
+            # Generate appointment date options
+            appointment_date_options = generate_appointment_date_options(available_interviewers)
+            print("Available appointment dates found:", appointment_date_options)
+
+            # Create an appointment with the generated date options
+            appointment = models.Appointment.objects.create(
+                freelancer=full_assessment.freelancer,
+                interview_type="soft_skills_assessment",
+                appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
+            )
+            appointment.save()
+
+            # Create a notification for the freelancer about the appointment
+            notification = models.Notification.objects.create(
+                user=full_assessment.freelancer,
+                type='alert',
+                title="Soft Skills Assessment Appointment",
+                description="Congratulations, You've passed the resume assessment and moved to the first round Soft Skills Assessment! Please select your appointment date.",
+            )
+            notification.save()
+
+            # Return the updated FullAssessment object along with appointment details
+            serializer = FullAssessmentSerializer(full_assessment)
+            
+            return Response({
+                "assessment": serializer.data,
+                "appointment": {
+                    "id": appointment.id,
+                    "appointment_date_options": appointment.appointment_date_options
+                }
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "detail": "No available interviewers for soft skills assessment."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    except models.FullAssessment.DoesNotExist:
+        return Response(
+            {"detail": "FullAssessment object not found for this freelancer."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response({
+            "detail": str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['PATCH'])
+def assign_live_assessment_appointment(request, freelancer_id):
+    try:
+        # Extract the applied_position_id from the request data
+        applied_position_id = request.data.get('applied_position_id', None)
+
+        # Get the FullAssessment object for the freelancer and applied position
+        full_assessment = models.FullAssessment.objects.get(
+            freelancer_id=freelancer_id,
+            applied_position_id=applied_position_id
+        )
+
+        # Update the soft_skills_assessment_status field to 'pending'
+        full_assessment.live_assessment_status = 'pending'
+        full_assessment.save()
+
+        # Find available interviewers for the soft skills assessment
+        available_interviewers = get_available_interviewers("live_interview")
+        print("Available interviewers found:", available_interviewers)
+
+        if available_interviewers:
+            print("Trying to get available appointment dates...")
+            # Generate appointment date options
+            appointment_date_options = generate_appointment_date_options(available_interviewers)
+            print("Available appointment dates found:", appointment_date_options)
+
+            # Create an appointment with the generated date options
+            appointment = models.Appointment.objects.create(
+                freelancer=full_assessment.freelancer,
+                interview_type="live_assessment",
+                category = "live_assessment",
+                appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
+            )
+            appointment.save()
+
+            # Create a notification for the freelancer about the appointment
+            notification = models.Notification.objects.create(
+                user=full_assessment.freelancer,
+                type='alert',
+                title="Live Assessment Appointment",
+                description="Congratulations, You've passed the depth skill assessment and moved to the live Assessment! Please select your appointment date.",
+            )
+            notification.save()
+
+            # Return the updated FullAssessment object along with appointment details
+            serializer = FullAssessmentSerializer(full_assessment)
+            
+            return Response({
+                "assessment": serializer.data,
+                "appointment": {
+                    "id": appointment.id,
+                    "appointment_date_options": appointment.appointment_date_options
+                }
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "detail": "No available interviewers for live assessment."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    except models.FullAssessment.DoesNotExist:
+        return Response(
+            {"detail": "FullAssessment object not found for this freelancer."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response({
+            "detail": str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
 class ScreeningResultViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ScreeningResult.objects.all()
     serializer_class = ScreeningResultSerializer
@@ -148,27 +433,27 @@ class FullAssessmentUpdateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     def patch(self, request, freelancer_id, format=None):
-        user = self.request.user
-        # user_interviewer = getattr(user, 'interviewer', None)
         try:
             # Retrieve the full assessment for the freelancer
-            full_assessment = models.FullAssessment.objects.get(freelancer=freelancer_id)
+            full_assessments = models.FullAssessment.objects.filter(freelancer=freelancer_id , status="pending")
         except models.FullAssessment.DoesNotExist:
             return Response({"error": "Full assessment not found for the given freelancer."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check if the authenticated user is an interviewer
-        # if not user_interviewer:
-        #     return Response({"error": "You do not have permission to update this assessment."}, status=status.HTTP_403_FORBIDDEN)
+        # Filter FullAssessment records based on the provided IDs
+        if not full_assessments.exists():
+            return Response({"error": "No FullAssessment records found for the provided IDs."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Serialize the data for update using the existing FullAssessmentSerializer
-        serializer = FullAssessmentSerializer(full_assessment, data=request.data, partial=True)
+        # Validate and update each FullAssessment record
+        updated_assessments = []
+        for assessment in full_assessments:
+            serializer = FullAssessmentSerializer(assessment, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                updated_assessments.append(serializer.data)
+            else:
+                return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        if serializer.is_valid():
-            # Save the updated data
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        else:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(updated_assessments, status=status.HTTP_200_OK)
 
 
 
@@ -276,3 +561,45 @@ def generate_appointment_date_options(interviewers):
         
         day_counter += 7
         return date_options
+
+
+class NotStartedAssessmentsView(APIView):
+    """
+    API endpoint to fetch Resumes and ScreeningResults for assessments that have not started.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        try:
+            # Query FullAssessment objects with not_started statuses
+            full_assessments = models.FullAssessment.objects.filter(
+                status='not_started',
+            )
+
+            # Get the freelancer emails from the filtered FullAssessments
+            freelancer_emails = full_assessments.values_list('freelancer__email', flat=True).distinct()
+
+            # Query Resumes that match the freelancer emails
+            resumes = Resume.objects.filter(email__in=freelancer_emails)
+
+            # Query ScreeningResults linked to the filtered Resumes
+            screening_results = ScreeningResult.objects.filter(resume__in=resumes)
+
+            # Serialize data
+            resumes_serializer = ResumeSerializer(resumes, many=True)
+            screening_results_serializer = ScreeningResultSerializer(screening_results, many=True)
+            full_assessments_serializer = FullAssessmentSerializer(full_assessments , many=True)
+            # Return response
+            return Response(
+                {
+                    "resumes": resumes_serializer.data,
+                    "screening_results": screening_results_serializer.data,
+                    "full_assesments":full_assessments_serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+

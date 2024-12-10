@@ -55,7 +55,7 @@ class FreelancerSearchView(APIView):
                         # Extract verified skills from the list of dictionaries
                         verified_skills = [
                             skill['skill'].lower() for skill in skills_data
-                            if isinstance(skill, dict) and skill.get("verified", False) and skill['skill'].lower() not in verified_skills
+                            if isinstance(skill, dict) and skill['skill'].lower() not in verified_skills
                         ]
 
                     # Check if it's a dictionary (though based on your description it should be a list)

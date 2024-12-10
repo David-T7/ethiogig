@@ -27,8 +27,10 @@ class ContractSerializer(serializers.ModelSerializer):
             'start_date',
             'end_date',
             'amount_agreed', 
+            'duration',
             'freelancer_accepted_terms',
             'status',
+            'hourly',
             'payment_status',
             'contract_update',
             'created_at',
@@ -74,7 +76,7 @@ class CounterOfferSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.CounterOffer
         fields = [
-            'id','proposed_amount','contract','title','sender','milestone_based','status','start_date','end_date'
+            'id','proposed_amount','contract','title','sender','hourly','duration','milestone_based','status','start_date','end_date'
         ]
         read_only_fields = ['id',]
 

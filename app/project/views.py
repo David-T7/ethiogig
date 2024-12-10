@@ -171,29 +171,27 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     def patch(self, request, *args, **kwargs):
         """Handle partial updates and update related milestones if they are pending"""
         contract = self.get_object()
-        if(not contract.contract_update):
-            contract.status = "accepted"
-            contract.save()
-            serializer = self.get_serializer(contract, data=request.data, partial=True)
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-
-            # Update related milestones' status to 'accepted' if currently 'pending'
-            milestones = models.Milestone.objects.filter(contract=contract, status='pending')
-            for milestone in milestones:
-                milestone.status = 'accepted'
-                milestone.save()
-        else:
-            contract_updated = contract.contract_update
-            contract_updated.amount_agreed = contract.amount_agreed  
-            contract_updated.terms = contract.terms  
-            contract_updated.save()
-            contract.delete()
-            # Update related milestones' status to 'accepted' if currently 'pending'
-            milestones = models.Milestone.objects.filter(contract=contract_updated, status='pending')
-            for milestone in milestones:
-                milestone.status = 'accepted'
-                milestone.save()
+        contract.status = "accepted"
+        contract.save()
+        serializer = self.get_serializer(contract, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        # Update related milestones' status to 'accepted' if currently 'pending'
+        milestones = models.Milestone.objects.filter(contract=contract, status='pending')
+        for milestone in milestones:
+            milestone.status = 'accepted'
+            milestone.save()
+        # else:
+        #     contract_updated = contract.contract_update
+        #     contract_updated.amount_agreed = contract.amount_agreed  
+        #     contract_updated.terms = contract.terms  
+        #     contract_updated.save()
+        #     contract.delete()
+        #     # Update related milestones' status to 'accepted' if currently 'pending'
+        #     milestones = models.Milestone.objects.filter(contract=contract_updated, status='pending')
+        #     for milestone in milestones:
+        #         milestone.status = 'accepted'
+        #         milestone.save()
         return Response(status=status.HTTP_200_OK)
 
 
@@ -873,6 +871,28 @@ class ProjectMilestonesView(APIView):
         except models.Project.DoesNotExist:
             return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
+class ActiveContractCheckView(APIView):
+    """
+    API view to check if a client has an active contract with a freelancer.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        freelancer_id = request.query_params.get('freelancer_id')
+        client_id = request.query_params.get('client_id')
+
+        if not freelancer_id or not client_id:
+            return Response({"error": "Both freelancer_id and client_id are required."}, status=400)
+
+        # Check if there's an active contract
+        active_contract = models.Contract.objects.filter(
+            freelancer_id=freelancer_id,
+            client_id=client_id,
+            status='active'
+        ).exists()
+
+        return Response({"active_contract": active_contract}, status=200)
+
 
 # class EscrowDetailView(generics.RetrieveUpdateDestroyAPIView):
 #     """View for retrieving, updating, or deleting a specific escrow"""
@@ -900,3 +920,5 @@ class ProjectMilestonesView(APIView):
 #         contract_id = self.kwargs.get('contract_pk')
 #         milestone_id = self.kwargs.get('milestone_pk')
 #         return self.queryset.filter(contract_id=contract_id, milestone_id=milestone_id)
+
+

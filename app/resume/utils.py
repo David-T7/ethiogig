@@ -161,13 +161,11 @@ def create_freelancer_from_resume(resume , applied_positions):
     # Optionally: Send a password reset link if needed
     # ...
     # First, create the FullAssessment object without assigning applied_positions
-    assessment = models.FullAssessment.objects.create(
-    freelancer=freelancer
-    )
-
-    # Then, assign the many-to-many field using .set()
-    assessment.applied_positions.set(applied_positions)
-
+    for applied_position in applied_positions:
+        assessment = models.FullAssessment.objects.create(
+        freelancer=freelancer,
+        applied_position = applied_position
+        )
     # Debugging
     print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.email}")
     return freelancer

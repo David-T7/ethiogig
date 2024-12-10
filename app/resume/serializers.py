@@ -33,8 +33,8 @@ class FullAssessmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = FullAssessment
         fields = [
-            'id', 'freelancer', 'finished', 'soft_skills_assessment_status', 'depth_skill_assessment_status', 
-            'applied_positions', 'live_assessment_status', 'project_assessment_status', 'passed', 
+            'id', 'freelancer', 'finished', 'soft_skills_assessment_status','status','depth_skill_assessment_status', 
+            'applied_position', 'live_assessment_status', 'project_assessment_status', 'passed', 
             'on_hold', 'on_hold_duration', 'created_at', 'updated_at', 'new_freelancer'
         ]
         read_only_fields = ['id']

@@ -23,6 +23,7 @@ urlpatterns = [
     path('freelancer/manage/', views.ManageFreelancerView.as_view(), name="manage-freelancer"),
     path('interviewer/manage/', views.ManageInterviewerView.as_view(), name="manage-interviewer"),
     path('dispute-manager/manage/', views.ManageDisputeMangerView.as_view(), name="manage-dispute-manager"),
+    path('resume-check/manage/', views.ManageResumeCheckerView.as_view(), name="resume-check-manager"),
     path('client/manage/', views.ManageClientView.as_view(), name="manage-client"),
     path('projects/', views.ManageProjectListView.as_view(), name="get-projects"),
     path('project/<uuid:pk>/', views.ManageProjectDetailView.as_view(), name='project-detail'),

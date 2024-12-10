@@ -147,20 +147,72 @@ class UpdateAppointmentStatusView(generics.UpdateAPIView):
 
 
 class InterviewerDashboardViewSet(viewsets.ViewSet):
+    """
+    Viewset for Interviewer Dashboard displaying latest appointments and interviews.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        # Fetch the latest 5 interviews related to the interviewer
+        interviews = FreelancerInterview.objects.filter(
+            interviewer=request.user
+        ).order_by('-id')[:5]
+
+        # Extract the related appointment IDs from these interviews
+        appointment_ids = interviews.values_list('appointment_id', flat=True)
+
+        # Fetch the corresponding appointments
+        appointments = Appointment.objects.filter(
+            id__in=appointment_ids
+        ).order_by('-appointment_date')
+
+        # Serialize the data
+        interview_serializer = FreelancerInterviewSerializer(interviews, many=True)
+        appointment_serializer = AppointmentSerializer(appointments, many=True)
+
+        return Response({
+            'latest_interviews': interview_serializer.data,
+            'latest_appointments': appointment_serializer.data,
+        })
+
+
+class InterviewerAppointments(viewsets.ViewSet):
     """Viewset for Interviewer Dashboard displaying latest appointments and interviews."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        # Get the latest appointments for the interviewer
-        appointments = Appointment.objects.filter(freelancer__in=FreelancerInterview.objects.filter(interviewer=request.user).values_list('freelancer', flat=True)).order_by('-appointment_date')[:5]
-        interviews = FreelancerInterview.objects.filter(interviewer=request.user).order_by('-id')[:5]  # Get the latest 5 interviews
-        
+       # Fetch the latest 5 interviews related to the interviewer
+        interviews = FreelancerInterview.objects.filter(
+            interviewer=request.user
+        )
+
+        # Extract the related appointment IDs from these interviews
+        appointment_ids = interviews.values_list('appointment_id', flat=True)
+
+        # Fetch the corresponding appointments
+        appointments = Appointment.objects.filter(
+            id__in=appointment_ids
+        ).order_by('-appointment_date')
+
+        # Serialize the data
         appointment_serializer = AppointmentSerializer(appointments, many=True)
+
+        return Response({
+            'appointments': appointment_serializer.data,
+        })
+class Interivews(viewsets.ViewSet):
+    """Viewset for Interviewer Dashboard displaying latest interviews."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        # Get the latest appointments for the interviewer
+        interviews = FreelancerInterview.objects.filter(interviewer=request.user).order_by('-id')
+        
         interview_serializer = FreelancerInterviewSerializer(interviews, many=True)
 
         return Response({
-            'latest_appointments': appointment_serializer.data,
-            'latest_interviews': interview_serializer.data,
+            'interviews': interview_serializer.data,
         })
-    

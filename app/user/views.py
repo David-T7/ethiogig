@@ -74,12 +74,14 @@ class LoginView(APIView):
                 role = 'interviewer'
             elif models.DisputeManager.objects.filter(id=user.id).exists():
                 role = 'dispute-manager'
+            elif models.ResumeChecker.objects.filter(id=user.id).exists():
+                role = 'resume-checker'
             
             # Check if there's an unfinished assessment if the user is a freelancer
             assessment_incomplete = False
             if role == 'freelancer':
                 assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
-            
+                
             # Prepare response data
             data = {
                 'token': token,
@@ -113,12 +115,16 @@ class UserRoleView(APIView):
             role = 'interviewer'
         elif models.DisputeManager.objects.filter(id=user.id).exists():
             role = 'dispute-manager'
+        elif models.ResumeChecker.objects.filter(id=user.id).exists():
+            role = 'resume-checker'
         else:
             role = 'Admin'
         # Check if there's an unfinished assessment if the user is a freelancer
         assessment_incomplete = False
         if role == 'freelancer':
                 assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
+                assessment_complete = models.FullAssessment.objects.filter(freelancer=user, finished=True).exists()
+                assessment_incomplete = assessment_incomplete and assessment_complete
         return Response({'role': role , 'assessment':assessment_incomplete}, status=status.HTTP_200_OK)
 
 class UserTypeView(APIView):
@@ -494,6 +500,17 @@ class ManageClientView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         """Retrieve and return the authenticated client"""
         return models.Client.objects.get(id=self.request.user.id)
+    
+class ManageResumeCheckerView(generics.RetrieveUpdateAPIView):
+    """Manage the authenticated resume checker"""
+    serializer_class = serializers.ResumeCheckerSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        """Retrieve and return the authenticated resume checker"""
+        return models.ResumeChecker.objects.get(id=self.request.user.id)
+
 
 class ManageInterviewerView(generics.RetrieveUpdateAPIView):
     """Manage the authenticated interviewer"""
@@ -722,12 +739,12 @@ class FreelancerChatListView(generics.GenericAPIView):
 
         # Filter chats by client_id
         chats = models.Chat.objects.filter(freelancer__id=freelancer_id)
-        
+        chat_data = []
+
         if not chats.exists():
-            return Response({"error": "No chats found for this freelancer."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(chat_data, status=status.HTTP_200_OK)
 
         # Serialize the chats
-        chat_data = []
         for chat in chats:
             messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
             message_serializer = serializers.MessageSerializer(messages, many=True)

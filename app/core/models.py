@@ -79,7 +79,7 @@ class Freelancer(User):
 
 
 class FullAssessment(models.Model):
-    status = [
+    assessment_status = [
          ('not_started', 'Not Started'),
          ('pending', 'Pending'),
          ('passed', 'Passed'),
@@ -89,11 +89,12 @@ class FullAssessment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     freelancer = models.ForeignKey('Freelancer', on_delete=models.SET_NULL, null=True)
     finished = models.BooleanField(default=False)
-    applied_positions = models.ManyToManyField('Services')
-    soft_skills_assessment_status = models.CharField(choices=status , default='not_started')
-    depth_skill_assessment_status = models.CharField(choices=status , default='not_started')
-    live_assessment_status = models.CharField(choices=status , default='not_started')
-    project_assessment_status = models.CharField(choices=status , default='not_started')
+    applied_position = models.ForeignKey('Services' , on_delete=models.SET_NULL, null=True)
+    soft_skills_assessment_status = models.CharField(choices=assessment_status , default='not_started')
+    depth_skill_assessment_status = models.CharField(choices=assessment_status , default='not_started')
+    live_assessment_status = models.CharField(choices=assessment_status , default='not_started')
+    project_assessment_status = models.CharField(choices=assessment_status , default='not_started')
+    status = models.CharField(choices=assessment_status , default='not_started')
     passed = models.BooleanField(default=False)
     on_hold = models.BooleanField(default=False)
     on_hold_duration = models.DurationField(null=True, blank=True)  # Duration field for hold period
@@ -123,6 +124,7 @@ class Interviewer(User):
     TYPE = [
         ('technical', 'Technical'),
         ('soft_skills', 'Soft Skills'),
+        ('live_interview', 'Live Interview'),
     ]
     full_name = models.CharField(max_length=100)
     expertise = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True, blank=True)
@@ -135,6 +137,12 @@ class Interviewer(User):
     type = models.CharField(max_length=20, choices=TYPE , default="technical")
     def __str__(self):
         return f"{self.full_name} - {self.expertise}"
+
+class ResumeChecker(User):
+    full_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    def __str__(self):
+        return f"{self.full_name} - {self.phone_number}"
 
 
 class DisputeManager(User):
@@ -166,9 +174,6 @@ class DrcResolvedDisputes(models.Model):
     title = models.CharField(max_length=20 , null=True , blank=True)
     comment = models.TextField(blank=True , null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
-
-
 
 
 
@@ -236,6 +241,10 @@ class Contract(models.Model):
     amount_agreed = models.DecimalField(max_digits=10, decimal_places=2 , blank=True , null=True)
     payment_terms = models.TextField(null=True, blank=True)
     freelancer_accepted_terms = models.BooleanField(default=False)
+    duration = models.CharField(
+        max_length=10,
+        default='1month',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(
@@ -248,11 +257,11 @@ class Contract(models.Model):
             ('completed', 'Completed'),
             ('canceled', 'Canceled'),
             ('inDispute', 'InDispute'),
-
         ],
         default='draft'
     )
     milestone_based = models.BooleanField(default=False)
+    hourly = models.BooleanField(default=False)
     contract_update = models.ForeignKey(
         'Contract',
         on_delete=models.SET_NULL,
@@ -314,6 +323,10 @@ class CounterOffer(models.Model):
     start_date = models.DateTimeField(null=True, blank=True)
     end_date = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    duration = models.CharField(
+        max_length=10,
+        default='1month',
+    )
     status = models.CharField(
         max_length=20,
         choices=[
@@ -324,6 +337,7 @@ class CounterOffer(models.Model):
         default='pending'
     )
     milestone_based = models.BooleanField(default=False)
+    hourly = models.BooleanField(default=False)
 
 
 
