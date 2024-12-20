@@ -34,7 +34,8 @@ class User(AbstractBaseUser , PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
     objects = UserManager()
-    
+    email_verified = models.BooleanField(default=False)
+    verification_token = models.CharField(max_length=255, null=True, blank=True)  # Add this line to store the verification token
     USERNAME_FIELD = 'email'
     def __str__(self):
         return self.email
@@ -171,7 +172,7 @@ class DrcResolvedDisputes(models.Model):
     return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
     return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
     winner = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=False)
-    title = models.CharField(max_length=20 , null=True , blank=True)
+    title = models.CharField(max_length=100 , null=True , blank=True)
     comment = models.TextField(blank=True , null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -255,6 +256,7 @@ class Contract(models.Model):
             ('accepted', 'accepted'),
             ('active', 'Active'),
             ('completed', 'Completed'),
+            ('pendingApproval', 'Pending Approval'),
             ('canceled', 'Canceled'),
             ('inDispute', 'InDispute'),
         ],
@@ -394,6 +396,7 @@ class Milestone(models.Model):
             ('pending', 'Pending'),
             ('accepted', 'accepted'),
             ('inDsipute', 'InDispute'),
+            ('pendingApproval', 'Pending Approval'),
             ('active', 'Active'),
             ('completed', 'Completed'),
             ('cancelled', 'Cancelled'),
@@ -473,14 +476,14 @@ class Dispute(models.Model):
     description = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
-    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
+    return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=False ,related_name='created_disputes')
+    created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True,blank=True ,related_name='created_disputes')
     updated_at = models.DateTimeField(auto_now=True)
-    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True,blank=False, related_name='client_disputes')
-    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True,blank=False, related_name='freelancer_disputes')
-    contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True , blank=False)
-    milestone = models.ForeignKey(Milestone , on_delete=models.SET_NULL, null=True , blank=False )
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True,blank=True, related_name='client_disputes')
+    freelancer = models.ForeignKey(Freelancer, on_delete=models.SET_NULL, null=True,blank=True, related_name='freelancer_disputes')
+    contract = models.ForeignKey(Contract, on_delete=models.SET_NULL, null=True , blank=True)
+    milestone = models.ForeignKey(Milestone , on_delete=models.SET_NULL, null=True , blank=True )
     response_deadline = models.DateTimeField(default=default_deadline)
     supporting_documents = models.ManyToManyField('SupportingDocument', blank=True, related_name='related_disputes')
     got_response = models.BooleanField(default=False)
@@ -500,7 +503,7 @@ class DisputeResponse(models.Model):
     ]
 
     title = models.CharField(max_length=255)
-    description = models.TextField()
+    description = models.TextField(null=True, blank=False)
     return_type = models.CharField(max_length=10, choices=RETURN_CHOICES)
     return_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -527,10 +530,13 @@ class Resume(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     full_name = models.CharField(max_length=50)
     email = models.EmailField(unique=False)
+    is_email_verified = models.BooleanField(default=False)
     applied_positions =  models.ManyToManyField("Services")
     resume_file = models.FileField(upload_to='resumes/')
     uploaded_at = models.DateTimeField(auto_now_add=True)
     password = models.CharField(max_length=128 , null=False)  # Password field
+    verification_token = models.CharField(max_length=255, null=True, blank=True)  # Add this line to store the verification token
+
 
     def set_password(self, raw_password):
         self.password = make_password(raw_password)

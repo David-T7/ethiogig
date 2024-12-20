@@ -190,7 +190,17 @@ SIMPLE_JWT = {
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
 }
+from core.utils import load_env  # Import the load_env function
+load_env()
 
 
-
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# Email settings
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.sendgrid.net'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_USE_SSL = False  # Set to `True` if using port 465
+EMAIL_HOST_USER =  os.getenv('SENDGRID_API_KEY')  # Required by SendGrid
+EMAIL_HOST_PASSWORD = os.getenv('SENDGRID_API_KEY')  # Securely fetch from .env
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'default@example.com')  # Fallback value
+FRONTEND_URL = "http://localhost:3000/"

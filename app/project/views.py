@@ -10,6 +10,8 @@ from django.utils import timezone
 from django.db.models import Count, Q, F
 from datetime import timedelta
 from rest_framework import permissions
+from rest_framework.exceptions import ValidationError
+from .utils import send_email
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -22,6 +24,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Create a project for a client"""
         client = models.Client.objects.get(email=self.request.user.email)
+        
+        # Check if a project with the same title already exists for the client
+        if models.Project.objects.filter(client=client, title=serializer.validated_data['title']).exists():
+            raise ValidationError({"title": "Title already used."})
+        
         serializer.save(client=client)
 
     def list(self, request, *args, **kwargs):
@@ -35,6 +42,27 @@ class ProjectViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    def perform_update(self, serializer):
+        """Update a project for a client"""
+        # Get the current project instance
+        instance = self.get_object()
+        client = models.Client.objects.get(email=self.request.user.email)
+        
+        # Check if another project with the same title exists for the client (excluding the current instance)
+        if models.Project.objects.filter(client=client, title=serializer.validated_data['title']).exclude(id=instance.id).exists():
+            raise ValidationError({"title": "Title already used by another project."})
+        
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        """Delete a project"""
+        # Check if the project is associated with any contract with a status other than "draft"
+        if models.Contract.objects.filter(project=instance).exclude(status="draft").exists():
+            raise ValidationError({"project": "This project is associated with a contract that is not in draft status and cannot be deleted."})
+
+        # If no associated contract is found with a status other than "draft", delete the project
+        instance.delete()
 
 class FreelancerProjectViewSet(viewsets.ModelViewSet):
     """View for managing projects a freelancer is involved in"""
@@ -171,16 +199,24 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
     def patch(self, request, *args, **kwargs):
         """Handle partial updates and update related milestones if they are pending"""
         contract = self.get_object()
-        contract.status = "accepted"
-        contract.save()
+        # Retrieve and handle the status field from the request
+        status_to_update = request.data.get('status')
+        if status_to_update:
+            contract.status = status_to_update
+            contract.save()
+        else:
+            contract.status = "accepted"
+            contract.save()
         serializer = self.get_serializer(contract, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         # Update related milestones' status to 'accepted' if currently 'pending'
-        milestones = models.Milestone.objects.filter(contract=contract, status='pending')
-        for milestone in milestones:
-            milestone.status = 'accepted'
-            milestone.save()
+         # Update related milestones if the status is 'accepted'
+        if status_to_update == 'accepted':
+            milestones = models.Milestone.objects.filter(contract=contract, status='pending')
+            for milestone in milestones:
+                milestone.status = 'accepted'
+                milestone.save()
         # else:
         #     contract_updated = contract.contract_update
         #     contract_updated.amount_agreed = contract.amount_agreed  
@@ -410,9 +446,11 @@ class DisputeViewSet(viewsets.ModelViewSet):
                     dispute=instance
                 )
                 instance.supporting_documents.add(supporting_document)
+        milestone = None
         if return_type and return_type=="full":
             contract = models.Contract.objects.get(pk = instance.contract.id)
-            milestone = models.Milestone.objects.get(pk = instance.milestone.id)
+            if(instance.milestone):
+                milestone = models.Milestone.objects.get(pk = instance.milestone.id)
             if (milestone):
                 instance.return_amount= milestone.amount
             else:
@@ -423,7 +461,8 @@ class DisputeViewSet(viewsets.ModelViewSet):
             print("checking status .....")
             print("contract id is ",instance.contract.id)
             contract = models.Contract.objects.get(pk = instance.contract.id)
-            milestone = models.Milestone.objects.get(pk = instance.milestone.id)
+            if(instance.milestone):
+                milestone = models.Milestone.objects.get(pk = instance.milestone.id)
             if (request.data.get('status') == 'resolved'):
                 if (milestone):
                     milestone.status = "active"

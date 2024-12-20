@@ -4,7 +4,7 @@ from core.models import Resume, ScreeningResult, ScreeningConfig ,Field , FullAs
 class ResumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Resume
-        fields = ['id', 'full_name','password','email', 'applied_positions', 'resume_file', 'uploaded_at']
+        fields = ['id', 'full_name','password','email','is_email_verified','applied_positions', 'resume_file', 'uploaded_at']
         read_only_fields = ['id','uploaded_at']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
 

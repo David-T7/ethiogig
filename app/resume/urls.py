@@ -2,7 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (ResumeViewSet, ScreeningResultViewSet, ScreeningConfigViewSet , FieldViewSet ,
 FullAssessmentViewSet , FreelancerFullAssessmentView , FullAssessmentUpdateView , NotStartedAssessmentsView , 
-assign_soft_skills_assessment_appointment , activate_full_assessment , approve_freelancer , assign_live_assessment_appointment)
+assign_soft_skills_assessment_appointment , activate_full_assessment , approve_freelancer , verify_email ,assign_live_assessment_appointment)
 
 router = DefaultRouter()
 router.register(r'resumes', ResumeViewSet)
@@ -20,4 +20,5 @@ urlpatterns = [
     path('assign-live-assessment-appointment/<uuid:freelancer_id>/',assign_live_assessment_appointment, name='assign_live_assessment_appointment'),
     path('activate-full-assessment/<uuid:freelancer_id>/', activate_full_assessment, name='activate_assessment'),
     path('approve_freelancer/<uuid:freelancer_id>/', approve_freelancer, name='approve_freelancer'),
+    path('verify-email/', verify_email, name='verify-email'),
 ]

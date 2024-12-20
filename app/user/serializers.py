@@ -28,7 +28,7 @@ class FreelancerSerializer(serializers.ModelSerializer):
         model = models.Freelancer
         fields = ['id', 'email', 'password', 'full_name', 'bio', 'skills', 'prev_work_experience', 'experience','portfolio',
                   'certifications', 'phone_number', 'hourly_rate', 'availability_status',
-                  'preferred_working_hours', 'average_rating', 'reviews',
+                  'preferred_working_hours', 'email_verified' , 'average_rating', 'reviews',
                   'languages_spoken', 'is_active','selected_payment_method', 'professional_title','verified', 'address', 'account_status',
                   'profile_picture']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
@@ -98,7 +98,7 @@ class ClientSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Client
         fields = ['id', 'email', 'password', 'company_name','contact_person','phone_number','projects_posted', 'average_rating',
-                  'verified', 'reviews', 'address','selected_payment_method', 'account_status', 'profile_picture']
+                  'verified', 'reviews', 'address', 'email_verified' ,'selected_payment_method', 'account_status', 'profile_picture']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
         read_only_fields = ['id']
 

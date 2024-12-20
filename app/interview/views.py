@@ -6,6 +6,13 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework import viewsets, generics, status 
 from core import models
+from core import models
+from django.conf import settings
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+
+
+
 class AppointmentViewSet(viewsets.ReadOnlyModelViewSet):
     """Viewset for managing appointments."""
     serializer_class = AppointmentSerializer
@@ -28,6 +35,28 @@ class AppointmentViewSet(viewsets.ReadOnlyModelViewSet):
         return Appointment.objects.none()
 
 
+
+def send_email(to_email, subject, html_content):
+    print("to email is ",to_email)
+    print("subject is ",subject)
+    print("html_content is ",html_content)
+    message = Mail(
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to_emails=to_email,
+        subject=subject,
+        html_content=html_content
+    )
+    print("from email is",settings.DEFAULT_FROM_EMAIL)
+    print("api key is ",settings.EMAIL_HOST_USER)
+    print("message is ",message)
+    try:
+        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
+        response = sg.send(message)
+        print("email sent")
+        return response.status_code
+    except Exception as e:
+        print("error sending email ",str(e))
+        return str(e)
 
 class FreelancerInterviewViewSet(viewsets.ModelViewSet):
     queryset = FreelancerInterview.objects.all()
@@ -69,6 +98,20 @@ class FreelancerInterviewViewSet(viewsets.ModelViewSet):
                     title=f"Interview for {instance.appointment.category} with {instance.freelancer.full_name} Finished ",
                     description=result
             )
+        subject = "Interview result update!"
+    
+        # HTML content for the email
+        html_content = f"""
+        <html>
+            <body>
+                <p>{notification_description}</p>
+            </body>
+        </html>
+        """
+        
+        # Call send_email function with the recipient email, subject, and HTML content
+        send_email(instance.freelancer.email, subject, html_content)
+
 
         return Response(serializer.data)
 

@@ -33,7 +33,16 @@ from django.core.serializers.json import DjangoJSONEncoder
 from datetime import timedelta, datetime
 from rest_framework.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
-
+from rest_framework.exceptions import ValidationError
+from django.contrib.auth.hashers import check_password
+from django.utils.http import urlsafe_base64_encode , urlsafe_base64_decode
+from django.utils.crypto import get_random_string
+from rest_framework.decorators import action
+from core import models
+from django.conf import settings
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from django.contrib.auth import get_user_model
 
 
 def get_tokens_for_user(user):
@@ -78,18 +87,28 @@ class LoginView(APIView):
                 role = 'resume-checker'
             
             # Check if there's an unfinished assessment if the user is a freelancer
+           # Check freelancer assessment status
             assessment_incomplete = False
+            assessment_started = False
+            email_verfied = user.email_verified
             if role == 'freelancer':
-                assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
-                
+                assessments = models.FullAssessment.objects.filter(freelancer=user)
+                if assessments.exists():
+                    assessment_incomplete = assessments.filter(finished=False).exists()
+                    assessment_started = assessments.filter(
+                        status__in=['pending', 'on_hold', 'passed', 'failed']
+                    ).exists()
             # Prepare response data
             data = {
                 'token': token,
                 'email': user.email,
                 'role': role,
-                'assessment': assessment_incomplete
+                'assessment': assessment_incomplete,
+                'assessment_started':assessment_started,
+                'email_verified':email_verfied,
             }
             print("data is ",data)
+            print("assessment started ",assessment_started)
             
             return Response(data, status=status.HTTP_200_OK)
         
@@ -120,12 +139,20 @@ class UserRoleView(APIView):
         else:
             role = 'Admin'
         # Check if there's an unfinished assessment if the user is a freelancer
+        # Check freelancer assessment status
         assessment_incomplete = False
+        assessment_started = False
+        email_verfied = user.email_verified
+
         if role == 'freelancer':
-                assessment_incomplete = models.FullAssessment.objects.filter(freelancer=user, finished=False).exists()
-                assessment_complete = models.FullAssessment.objects.filter(freelancer=user, finished=True).exists()
-                assessment_incomplete = assessment_incomplete and assessment_complete
-        return Response({'role': role , 'assessment':assessment_incomplete}, status=status.HTTP_200_OK)
+            assessments = models.FullAssessment.objects.filter(freelancer=user)
+            if assessments.exists():
+                assessment_incomplete = assessments.filter(finished=False).exists()
+                assessment_started = assessments.filter(
+                    status__in=['pending', 'on_hold', 'passed', 'failed']
+                ).exists()
+
+        return Response({'role': role , 'assessment':assessment_incomplete , 'assessment_started':assessment_started , 'email_verified':email_verfied}, status=status.HTTP_200_OK)
 
 class UserTypeView(APIView):
     """
@@ -173,15 +200,125 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     def get_serializer_class(self):
         if self.action == 'create':
-            return serializers.ClientCreateSerializer
-        return serializers.ClientSerializer
+            return serializers.ClientCreateSerializer  # Use the serializer for creation
+        return serializers.ClientSerializer  # Default serializer for other actions
+
     def create(self, request, *args, **kwargs):
+        # Check if email already exists
+        email = request.data.get("email")
+        if models.Client.objects.filter(email=email).exists():
+            raise ValidationError({"email": "Email already exists."})
+
+        # Proceed with normal creation if no validation errors
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
+
+        # Add JWT tokens to the response
         headers = self.get_success_headers(serializer.data)
-        tokens = get_tokens_for_user(serializer.instance)
+        tokens = get_tokens_for_user(serializer.instance)  # Assuming this generates JWT tokens for the client
+        verification_token = get_random_string(32)
+        send_verification_email(serializer.instance , verification_token)  # Ensure this sends an email with a token for verification
+
+        # Return response with client data and tokens
         return Response({**serializer.data, **tokens}, status=status.HTTP_201_CREATED, headers=headers)
+
+
+@api_view(['POST'])
+def send_email_verification_link(request):
+    email = request.data.get("email")
+    user = models.User.objects.get(email = email)
+    verification_token = get_random_string(32)
+    send_verification_email(user , verification_token)  # Ensure this sends an email with a token for verification
+    # Return response with client data and tokens
+    return Response(status=status.HTTP_200_OK)
+
+
+def send_email(to_email, subject, html_content):
+    print("to email is ",to_email)
+    print("subject is ",subject)
+    print("html_content is ",html_content)
+    message = Mail(
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to_emails=to_email,
+        subject=subject,
+        html_content=html_content
+    )
+    print("from email is",settings.DEFAULT_FROM_EMAIL)
+    print("api key is ",settings.EMAIL_HOST_USER)
+    print("message is ",message)
+    try:
+        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
+        response = sg.send(message)
+        print("email sent")
+        return response.status_code
+    except Exception as e:
+        print("error sending email ",str(e))
+        return str(e)
+
+
+
+
+def send_verification_email(user , verification_token):
+    uid = urlsafe_base64_encode(str(user.id).encode())
+    User = get_user_model()
+    # Find the user with the decoded id
+    user = get_object_or_404(User, pk=user.id)
+    user.verification_token = verification_token
+    user.save()
+    verification_url = "user/{}/verify-email/{}/".format(uid, user.verification_token)
+    full_url = f"{settings.FRONTEND_URL}{verification_url}"
+    # Subject for the email
+    subject = "Verify your email address"
+    
+    # HTML content for the email
+    html_content = f"""
+    <html>
+        <body>
+            <p>Click the link below to verify your email address:</p>
+            <a href="{full_url}">{full_url}</a>
+        </body>
+    </html>
+    """
+    
+    # Call send_email function with the recipient email, subject, and HTML content
+    return send_email(user.email, subject, html_content)
+
+
+@api_view(['POST'])
+def verify_email(request):
+    print("Trying to find user...")
+
+    token = request.data.get('token')
+    pk = request.data.get('pk')
+
+    try:
+        # Decode base64-encoded pk
+        pk_decoded = urlsafe_base64_decode(pk).decode('utf-8')
+        user_id = UUID(pk_decoded)  # Convert to UUID to validate format
+    except (ValueError, TypeError):
+        raise ValidationError("Invalid or malformed UUID.")
+    # Get the User model
+    User = get_user_model()
+
+    # Find the user with the decoded id
+    user = get_object_or_404(User, pk=user_id)
+    print("token is ",token)
+    print("user token is ", user.verification_token)
+    # Check if the verification token matches
+    if user.verification_token != token:
+        return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Mark the email as verified
+    user.email_verified = True
+    user.verification_token = ""  # Clear the verification token after successful verification
+    user.save()
+
+    response_data = {
+        "message": "Email verified! You can now log in using your account details.",
+    }
+
+    return Response(response_data, status=status.HTTP_200_OK)
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -587,11 +724,18 @@ class ManageFreelnacerListView(generics.ListAPIView):
 
 
 class ManageProjectListView(generics.ListAPIView):
-    """View for listing all projects in the system"""
-    queryset = models.Project.objects.all()
+    """View for listing all projects for the client in the system"""
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        """
+        Optionally restricts the returned projects to the ones where the user is the client.
+        """
+        user = self.request.user
+        # Assuming the 'client' field in the Project model refers to the user who created the project
+        return models.Project.objects.filter(client=user)
 
 class ManageProjectDetailView(generics.RetrieveAPIView):
     """View for retrieving a single project"""
@@ -683,7 +827,7 @@ class ChatBetweenClientFreelancerView(generics.GenericAPIView):
         chat = models.Chat.objects.filter(client_id=client_id, freelancer_id=freelancer_id).first()
 
         if not chat:
-            return Response({"detail": "Chat not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response([], status=status.HTTP_200_OK)
 
         # Serialize the chat and its messages
         chat_serializer = serializers.ChatSerializer(chat)
@@ -710,6 +854,7 @@ class ClientChatListView(generics.GenericAPIView):
         chats = models.Chat.objects.filter(client__id=client_id)
         
         if not chats.exists():
+            print("no chats found")
             return Response({"error": "No chats found for this client."}, status=status.HTTP_404_NOT_FOUND)
 
         # Serialize the chats
@@ -739,6 +884,36 @@ class FreelancerChatListView(generics.GenericAPIView):
 
         # Filter chats by client_id
         chats = models.Chat.objects.filter(freelancer__id=freelancer_id)
+        chat_data = []
+
+        if not chats.exists():
+            return Response(chat_data, status=status.HTTP_200_OK)
+
+        # Serialize the chats
+        for chat in chats:
+            messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
+            message_serializer = serializers.MessageSerializer(messages, many=True)
+            chat_serializer = serializers.ChatSerializer(chat)
+            chat_data.append({
+                "chat": chat_serializer.data,
+                "messages": message_serializer.data,
+            })
+        
+        return Response(chat_data, status=status.HTTP_200_OK)
+
+class ClientChatListView(generics.GenericAPIView):
+    """View to retrieve all chats and messages for a specific client"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        client_id = request.query_params.get('client_id')
+        
+        if not client_id:
+            return Response({"error": "Client ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Filter chats by client_id
+        chats = models.Chat.objects.filter(client__id=client_id)
         chat_data = []
 
         if not chats.exists():
@@ -823,8 +998,6 @@ def reset_password(request, uidb64, token):
 
 
 class PasswordResetRequestView(APIView):
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
     def post(self, request, *args, **kwargs):
         serializer = serializers.PasswordResetRequestSerializer(data=request.data)
         if serializer.is_valid():
@@ -854,9 +1027,29 @@ class PasswordChangeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        user = request.user  # Get the authenticated user
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+
+        # Validate the old password
+        if not check_password(old_password, user.password):
+            return Response(
+                'The old password is incorrect.',
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Use the serializer for further validation and updating the password
         serializer = serializers.PasswordChangeSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        notification = models.Notification.objects.create(
+                user=user,
+                type='alert',
+                title="Passowrd Changed",
+                description="You've successfully changed your password!",
+            )
+        notification.save()
+        
         return Response({'detail': 'Password has been updated successfully.'}, status=status.HTTP_200_OK)
     
 

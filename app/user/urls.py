@@ -14,6 +14,7 @@ urlpatterns = [
     path('clientFreelancerChat/', views.ChatBetweenClientFreelancerView.as_view(), name='chat-client-freelancer'),
     path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
     path('freelancerChats/', views.FreelancerChatListView.as_view(), name='freelancer-chats'),
+    path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
     path('chats/<uuid:chat_pk>/messages/', views.MessageViewSet.as_view({'post': 'create'})),
     path('freelancer/remove/', views.RemoveFreelancerView.as_view(), name='remove-freelancer'),
     path('client/remove/', views.RemoveClientView.as_view(), name='remove-client'),
@@ -38,8 +39,10 @@ urlpatterns = [
     path('messages/read/', views.MarkMessagesAsReadView.as_view(), name='mark-messages-as-read'),
     path('verify-skills/', views.VerifyFreelancerSkillsView.as_view(), name='verify-freelnacer-skills'),
     path('user-type/', views.UserTypeView.as_view(), name='user-type'),
-
+    path('verify-email/', views.verify_email, name='verify-email'),
     # path('client/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),
     # path('freelancer/<int:pk>/', views.ManageFreelancerDetailView.as_view(), name='freelancer-detail'),
+    path('send-verification-link/', views.send_email_verification_link, name='send-verification-link'),
+
     path('', include(router.urls)),
 ]
