@@ -43,8 +43,8 @@ from django.conf import settings
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.contrib.auth import get_user_model
-
-
+from django.http import JsonResponse
+import json
 def get_tokens_for_user(user):
     """Generate JWT tokens for a user"""
     refresh = RefreshToken.for_user(user)
@@ -88,13 +88,13 @@ class LoginView(APIView):
             
             # Check if there's an unfinished assessment if the user is a freelancer
            # Check freelancer assessment status
-            assessment_incomplete = False
+            assessment_complete = False
             assessment_started = False
             email_verfied = user.email_verified
             if role == 'freelancer':
                 assessments = models.FullAssessment.objects.filter(freelancer=user)
                 if assessments.exists():
-                    assessment_incomplete = assessments.filter(finished=False).exists()
+                    assessment_complete = assessments.filter(finished=True).exists()
                     assessment_started = assessments.filter(
                         status__in=['pending', 'on_hold', 'passed', 'failed']
                     ).exists()
@@ -103,7 +103,7 @@ class LoginView(APIView):
                 'token': token,
                 'email': user.email,
                 'role': role,
-                'assessment': assessment_incomplete,
+                'assessment': assessment_complete,
                 'assessment_started':assessment_started,
                 'email_verified':email_verfied,
             }
@@ -140,19 +140,19 @@ class UserRoleView(APIView):
             role = 'Admin'
         # Check if there's an unfinished assessment if the user is a freelancer
         # Check freelancer assessment status
-        assessment_incomplete = False
+        assessment_complete = False
         assessment_started = False
-        email_verfied = user.email_verified
+        email_verified = user.email_verified
 
         if role == 'freelancer':
             assessments = models.FullAssessment.objects.filter(freelancer=user)
             if assessments.exists():
-                assessment_incomplete = assessments.filter(finished=False).exists()
+                assessment_complete = assessments.filter(finished=True).exists()
                 assessment_started = assessments.filter(
                     status__in=['pending', 'on_hold', 'passed', 'failed']
                 ).exists()
 
-        return Response({'role': role , 'assessment':assessment_incomplete , 'assessment_started':assessment_started , 'email_verified':email_verfied}, status=status.HTTP_200_OK)
+        return Response({'role': role , 'assessment':assessment_complete , 'assessment_started':assessment_started , 'email_verified':email_verified}, status=status.HTTP_200_OK)
 
 class UserTypeView(APIView):
     """
@@ -255,6 +255,46 @@ def send_email(to_email, subject, html_content):
     except Exception as e:
         print("error sending email ",str(e))
         return str(e)
+
+
+@api_view(['POST'])
+def send_email_(request):
+    
+    name = request.data.get('name')
+    email = request.data.get('email')
+    message = request.data.get('message')
+    to_email = request.data.get('to_email')
+    subject = request.data.get('subject')
+    if not name or not email or not message:
+        return JsonResponse({'error': 'All fields are required'}, status=400)
+
+    try:
+        html_content = f"""
+        <html>
+            <body>
+                <p>Click the link below to verify your email address:</p>
+                <a href="{message}</a>
+            </body>
+        </html>
+        """
+
+        message = Mail(
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to_emails=to_email,
+        subject=subject,
+        html_content=html_content
+        )
+        print("from email is",settings.DEFAULT_FROM_EMAIL)
+        print("api key is ",settings.EMAIL_HOST_USER)
+        print("message is ",message)
+        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
+        response = sg.send(message)
+        print("email sent")
+        return Response(status=status.HTTP_200_OK)
+
+    except Exception as e:
+        print(e)
+        return Response({'error': 'Failed to send email'}, status=500)
 
 
 
@@ -1056,24 +1096,23 @@ class PasswordChangeView(APIView):
 class SelectAppointmentDateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
     def get_object(self):
-        """Retrieve and return the authenticated freelancer"""
-        if models.Freelancer.objects.filter(id= self.request.user.id).exists():
+        """Retrieve and return the authenticated freelancer or interviewer"""
+        if models.Freelancer.objects.filter(id=self.request.user.id).exists():
             return models.Freelancer.objects.get(id=self.request.user.id)
-        elif models.Interviewer.objects.filter(id= self.request.user.id).exists():
+        elif models.Interviewer.objects.filter(id=self.request.user.id).exists():
             return models.Interviewer.objects.get(id=self.request.user.id)
         else:
             return None
+
     def post(self, request):
+        """Create a new appointment date"""
         instance = self.get_object()  # Get the current freelancer instance
         appointment_id = request.data.get('appointment_id')
         selected_date = request.data.get('date')
         interviewer_id = request.data.get('interviewer_id')
-
-        print("appointment_id:", appointment_id)
-        print("date:", selected_date)
-        print("interviewer_id:", interviewer_id)
-
+        user_freelancer = getattr(request.user, 'freelancer', None)
         # Ensure all required fields are provided
         if not appointment_id or not selected_date or not interviewer_id:
             return Response({
@@ -1081,15 +1120,10 @@ class SelectAppointmentDateView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            print("Attempting to fetch appointment...")
             appointment = models.Appointment.objects.get(pk=UUID(appointment_id))
-            print("Appointment found:", appointment)
-
-            print("Attempting to fetch interviewer...")
             interviewer = models.Interviewer.objects.get(pk=UUID(interviewer_id))
-            print("Interviewer found:", interviewer)
 
-                # Update the appointment with the selected date
+            # Update the appointment with the selected date
             appointment.appointment_date = selected_date
             appointment.save()
 
@@ -1101,28 +1135,37 @@ class SelectAppointmentDateView(APIView):
                 passed=False,  # Initial state is not passed
                 done=False  # Initial state is not done
             )
-           # Assuming appointment.appointment_date is a string in ISO 8601 format
-            appointment_date_str = appointment.appointment_date  # e.g., "2024-10-24T09:17:00.000Z"
 
-            # Parse the string into a datetime object
+            # Format appointment date and send notifications
+            appointment_date_str = appointment.appointment_date
             appointment_date = datetime.fromisoformat(appointment_date_str[:-1])  # Remove the 'Z' for UTC
-
-            # Format the date into a more readable form
             formatted_date = appointment_date.strftime("%B %d, %Y at %H:%M %p")
 
+            # Notification for the freelancer
             models.Notification.objects.create(
-                    user=instance,
-                    type='alert',
-                    title=f"Interview Appointment selection successful",
-                    description=f"you have selected your appointment date for {appointment.category} interview on {formatted_date}",
+                user=instance,
+                type='alert',
+                title="Interview Appointment selection successful",
+                description=f"You have selected your appointment date for {appointment.category} interview on {formatted_date}",
             )
+            notification_reciever = instance
+            if user_freelancer:
+                notification_reciever =  freelancer_interview.freelancer
+            else: 
+                notification_reciever = interviewer
+            # Notification for the interviewer
             models.Notification.objects.create(
-                    user=appointment.freelancer,
-                    type='alert',
-                    title=f"Interview Appointment Date for {appointment.category} changed! ",
-                    description=f"your appointment date for {appointment.category} interview has been chagned to {formatted_date}",
+                user=notification_reciever,
+                type='alert',
+                title=f"Interview Appointment Date for {appointment.category} changed!",
+                description=f"Your appointment date for {appointment.category} interview has been changed to {formatted_date}",
             )
+
             updateAppointmentDateOptions(freelancer_interview)
+
+            # Send email to interviewer
+            html_content = f"<html><body><p>Appointment date for {appointment.category} interview has been selected to {formatted_date}</p></body></html>"
+            send_email(notification_reciever.email, "Appointment Date Selected", html_content)
             return Response({
                 'message': 'Appointment date and interview created successfully',
                 'interview_id': str(freelancer_interview.id)
@@ -1135,6 +1178,63 @@ class SelectAppointmentDateView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    def patch(self, request):
+        """Update appointment date"""
+        instance = self.get_object()  # Get the current freelancer or interviewer instance
+        appointment_id = request.data.get('appointment_id')
+        selected_date = request.data.get('date')
+        user_freelancer = getattr(request.user, 'freelancer', None)
+
+        # Ensure appointment_id and selected_date are provided
+        if not appointment_id or not selected_date:
+            return Response({
+                'error': 'Appointment ID and date are required for update.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Fetch appointment
+            appointment = models.Appointment.objects.get(pk=UUID(appointment_id))
+
+            # Update the appointment with the new date
+            appointment.appointment_date = selected_date
+            appointment.save()
+
+            # Format the appointment date
+            appointment_date_str = appointment.appointment_date
+            appointment_date = datetime.fromisoformat(appointment_date_str[:-1])  # Remove 'Z' for UTC
+            formatted_date = appointment_date.strftime("%B %d, %Y at %H:%M %p")
+
+            # Notification for the freelancer
+            models.Notification.objects.create(
+                user=instance,
+                type='alert',
+                title="Interview Appointment Date updated",
+                description=f"Your appointment date for {appointment.category} interview has been updated to {formatted_date}",
+            )
+            notification_reciever = instance
+            if user_freelancer:
+                notification_reciever =  appointment.freelancer
+            else: 
+                notification_reciever = appointment.interviewer
+            models.Notification.objects.create(
+                    user=notification_reciever,
+                    type='alert',
+                    title=f"Interview Appointment Date for {appointment.category} updated",
+                    description=f"Your appointment date for {appointment.category} interview has been updated to {formatted_date}",
+                )
+            updateAppointmentDateOptions(appointment)
+             # Send email to interviewer
+            html_content = f"<html><body><p>Appointment date for {appointment.category} interview has been selected to {formatted_date}</p></body></html>"
+            send_email(notification_reciever.email, "Appointment Date Selected", html_content)
+            return Response({
+                'message': 'Appointment date updated successfully',
+                'appointment_id': str(appointment.id)
+            }, status=status.HTTP_200_OK)
+
+        except models.Appointment.DoesNotExist:
+            return Response({'error': 'Appointment not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 def updateAppointmentDateOptions(freelancer_interview):
     try:
@@ -1216,3 +1316,16 @@ class VerifyFreelancerSkillsView(APIView):
             {"detail": "Skills have been successfully updated."},
             status=status.HTTP_200_OK,
         )
+
+
+@api_view(['POST'])
+def sign_up(request):
+    serializer = serializers.SignUpListSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class WaitlistCreateView(generics.CreateAPIView):
+    queryset = models.Waitlist.objects.all()
+    serializer_class = serializers.WaitlistSerializer

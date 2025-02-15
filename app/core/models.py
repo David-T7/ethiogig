@@ -98,10 +98,16 @@ class FullAssessment(models.Model):
     status = models.CharField(choices=assessment_status , default='not_started')
     passed = models.BooleanField(default=False)
     on_hold = models.BooleanField(default=False)
-    on_hold_duration = models.DurationField(null=True, blank=True)  # Duration field for hold period
+    hold_until = models.DateTimeField(null=True, blank=True)  # Date field for hold period
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     new_freelancer = models.BooleanField(default=True)
+
+
+class AssessmentTermination(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    freelancer = models.ForeignKey('Freelancer', on_delete=models.SET_NULL, null=True)
+    termination_count = models.PositiveIntegerField(default=0)
 
 class Client(User):
     company_name = models.CharField(max_length=255, blank=True )
@@ -142,8 +148,14 @@ class Interviewer(User):
 class ResumeChecker(User):
     full_name = models.CharField(max_length=100)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
+    resume_check_per_week = models.IntegerField(default=1)
+    max_resume_check_per_day = models.IntegerField(default=1)
+    working_hours_start = models.TimeField(default=timezone.now)  # Start time of working hours
+    working_hours_end = models.TimeField(default=timezone.now)    # End time of working hours
     def __str__(self):
         return f"{self.full_name} - {self.phone_number}"
+
+
 
 
 class DisputeManager(User):
@@ -462,6 +474,7 @@ class Dispute(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     STATUS_CHOICES = [
         ('open', 'Open'),
+        ('cancelled', 'Cancelled'),
         ('resolved', 'Resolved'),
         ('auto_resolved', 'Auto Resolved'),
         ('drc_forwarded' ,'DRC Forwarded' )
@@ -547,6 +560,28 @@ class Resume(models.Model):
 
     def __str__(self):
         return self.full_name
+
+
+class ResumeCheck(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resumechecker = models.ForeignKey(ResumeChecker, on_delete=models.SET_NULL, null=True, related_name='resume_checks')
+    resume = models.ForeignKey('Resume', on_delete=models.CASCADE)  # Link to the Resume
+    passed = models.BooleanField(default=False)  # Whether the freelancer passed the interview
+    feedback = models.TextField(blank=True, null=True)  # Interviewer's feedback on the interview
+    done = models.BooleanField(default=False)
+    def __str__(self):
+        return f"Resume Check for Freelancer {self.resume.full_name} with Resume Checker {self.resumechecker.full_name}"
+
+
+class ApplicationOnHold(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.ForeignKey('Resume', on_delete=models.SET_NULL, null=True)
+    email = models.EmailField()
+    position = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True)
+    hold_until = models.DateTimeField(null=True, blank=True)  # Date field for hold period
+    reason = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
 
 
 class ScreeningResult(models.Model):
@@ -645,4 +680,21 @@ class FreelancerInterview(models.Model):
     def __str__(self):
         return f"Interview for Freelancer {self.freelancer_id} with Interviewer {self.interviewer_id}"
 
+
+
+
+class SignUpList(models.Model):
+    full_name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.full_name
+
+
+class Waitlist(models.Model):
+    full_name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    field = models.ForeignKey(Field, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
 

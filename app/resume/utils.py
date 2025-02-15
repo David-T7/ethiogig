@@ -133,7 +133,9 @@ def send_password_reset_email(user_email):
     )
     print(f"Password reset link sent to {user_email}")
 
-def create_freelancer_from_resume(resume , applied_positions):
+from django.contrib.auth import authenticate
+
+def create_freelancer_from_resume(resume, applied_positions):
     """Create a Freelancer from a passed resume and send a password reset link."""
     user_email = resume.email
 
@@ -142,30 +144,37 @@ def create_freelancer_from_resume(resume , applied_positions):
         email=user_email,
         defaults={
             'full_name': resume.full_name,
-            # Add other default fields as necessary
+            # Add other fields like bio, portfolio, skills, etc. here
         }
     )
 
-    # After ensuring the Freelancer is created or updated, handle User
-    user, user_created = models.User.objects.get_or_create(
-        email=user_email,
-    )
+    # After ensuring the Freelancer is created or updated, handle User (password)
+    user = freelancer  # Freelancer is a subclass of User, so it's the same object
 
-    # Set the password and save the user
+    # Set the password and save the user only if a password is provided
     if resume.password:
+        print(f"Setting password for {user_email}")
         user.set_password(resume.password)
-        user.save()
+        user.save()  # Save after setting the password
+
         # Debugging: Check the hashed password
         print(f"Hashed password for user: {user.password}")
 
-    # Optionally: Send a password reset link if needed
-    # ...
-    # First, create the FullAssessment object without assigning applied_positions
+        # Optionally: Authenticate the user here, if necessary
+        # user_authenticated = authenticate(email=user.email, password=resume.password)
+        # if user_authenticated is not None:
+        #     print("User authenticated")
+        # else:
+        #     print("Authentication failed")
+
+    # Create FullAssessment objects based on the applied positions
     for applied_position in applied_positions:
-        assessment = models.FullAssessment.objects.create(
-        freelancer=freelancer,
-        applied_position = applied_position
+        assessment = models.FullAssessment.objects.get_or_create(
+            freelancer=freelancer,
+            applied_position=applied_position
         )
+    
     # Debugging
-    print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.email}")
+    print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.full_name}")
+
     return freelancer

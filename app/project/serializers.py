@@ -112,7 +112,6 @@ class DisputeSerializer(serializers.ModelSerializer):
             'milestone',
             'updated_at',
             'response_deadline',
-            'supporting_documents',
             'got_response'
         )
         read_only_fields = [
@@ -137,7 +136,6 @@ class DisputeResponseSerializer(serializers.ModelSerializer):
             'created_by',
             'updated_at',
             'response_deadline',
-            'supporting_documents',
             'got_response'
         )
         read_only_fields = [

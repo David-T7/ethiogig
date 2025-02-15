@@ -151,18 +151,47 @@ class ContractViewSet(viewsets.ModelViewSet):
         if request.user.client != instance.client:
             raise PermissionDenied("You do not have permission to update this contract.")
         
-        if 'status' in request.data and request.data['status'] == 'active':
-            escrows = models.Escrow.objects.filter(contract = instance)
-            if escrows.__len__()>0:
-                if instance.is_escrow_fulfilled():
-                    instance.start_project()
-                    request.data['status'] = 'in_progress'
-                else:
-                    return Response({'status': 'Escrow not fulfilled'}, status=status.HTTP_400_BAD_REQUEST)
+        # if 'status' in request.data and request.data['status'] == 'active':
+        #     escrows = models.Escrow.objects.filter(contract = instance)
+        #     if escrows.__len__()>0:
+        #         if instance.is_escrow_fulfilled():
+        #             instance.start_project()
+        #             request.data['status'] = 'in_progress'
+        #         else:
+        #             return Response({'status': 'Escrow not fulfilled'}, status=status.HTTP_400_BAD_REQUEST)
+
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        message = ""
+        subject = ""
+        if 'status' in request.data and request.data['status'] == 'pending':
+            message = "You have received a contract offer."
+            subject = "Contract Offer" 
+        else:
+            message = f"Contract status updated to " + request.data['status']
+            subject = "Contract status updated"
+        html_content = f"""
+        <html>
+        <body>
+            <p>{message}</p>
+        </body>
+        </html>
+        """
+        send_email(instance.freelancer.email, subject, html_content)
+        models.Notification.objects.create(
+                    user=instance.client,
+                    type='alert',
+                    title=f"Contract status updated",
+                    description=f"Contract {instance.title} status updated to {instance.status}"
+            )
+        models.Notification.objects.create(
+                    user=instance.freelancer,
+                    type='alert',
+                    title=subject,
+                    description=message
+            )
         return Response(serializer.data)
 
 
@@ -228,6 +257,27 @@ class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
         #     for milestone in milestones:
         #         milestone.status = 'accepted'
         #         milestone.save()
+        message = f"contract status for {contract.title} has been changed to {status_to_update}."
+        html_content = f"""
+        <html>
+        <body>
+            <p>{message}</p>
+        </body>
+        </html>
+        """
+        send_email(contract.client.email, "Contract status updated.", html_content)
+        models.Notification.objects.create(
+                user=contract.client,
+                type='alert',
+                title=f"Contract status updated",
+                description=message
+        )
+        models.Notification.objects.create(
+                user=contract.freelancer,
+                type='alert',
+                title=f"Contract status updated",
+                description=message
+        )
         return Response(status=status.HTTP_200_OK)
 
 
@@ -356,6 +406,66 @@ class MilestoneByProjectView(generics.ListAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class FreelancerMilestoneByProjectView(generics.ListAPIView):
+    """View to return freelancer milestones based on project_id"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = serializers.MilestoneSerializer
+
+    def get_queryset(self):
+        # Get project_id from the URL kwargs
+        project_id = self.kwargs.get('project_id')
+        print("freelancer is",self.request.user.freelancer)
+        # Filter contracts by project_id
+        contracts = models.Contract.objects.filter(project_id=project_id , freelancer=self.request.user.freelancer)
+
+        # Return milestones related to the contracts of the given project
+        return models.Milestone.objects.filter(contract__in=contracts)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            return Response(
+                {"detail": "No milestones found for the given project."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class FreelancerContractByProjectView(generics.ListAPIView):
+    """
+    View to return freelancer contracts based on project_id.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = serializers.ContractSerializer
+
+    def get_queryset(self):
+        # Get project_id from the URL kwargs
+        project_id = self.kwargs.get('project_id')
+
+        # Filter contracts by project_id and freelancer
+        return models.Contract.objects.filter(
+            project_id=project_id,
+            freelancer=self.request.user.freelancer
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+
+        # Handle case when no contracts are found
+        if not queryset.exists():
+            return Response(
+                {"detail": "No Contract found for the given project."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Serialize and return the data
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 class CounterOfferView(viewsets.ModelViewSet):
     """Viewset for managing disputes between client and freelancer"""
     queryset = models.CounterOffer.objects.all()
@@ -396,6 +506,38 @@ class DisputeViewSet(viewsets.ModelViewSet):
                 )
             else:
                 raise PermissionError("User is not authorized to create a dispute for this contract.")
+            dispute_reciever = None
+            if(user_client):
+                dispute_reciever = contract.freelancer
+            else:   
+                dispute_reciever = contract.client
+            notification_description = f"A dispute has been created for contract {contract.title}."
+
+            models.Notification.objects.create(
+                    user=dispute_reciever,
+                    type='alert',
+                    title=f"Dispute Created",
+                    description=notification_description
+            )
+            models.Notification.objects.create(
+                    user=dispute.created_by,
+                    type='alert',
+                    title=f"Dispute Created",
+                    description=f"You have created a dispute for contract {contract.title}"
+            )
+            subject = "Dispute Created!"
+    
+            # HTML content for the email
+            html_content = f"""
+            <html>
+                <body>
+                    <p>{notification_description}</p>
+                </body>
+            </html>
+            """
+            
+            # Call send_email function with the recipient email, subject, and HTML content
+            send_email(dispute_reciever.email , subject, html_content)
         except PermissionError as e:
             # Handle the case where the user is neither a client nor a freelancer in this contract
             print(f"PermissionError: {e}")
@@ -463,7 +605,7 @@ class DisputeViewSet(viewsets.ModelViewSet):
             contract = models.Contract.objects.get(pk = instance.contract.id)
             if(instance.milestone):
                 milestone = models.Milestone.objects.get(pk = instance.milestone.id)
-            if (request.data.get('status') == 'resolved'):
+            if (request.data.get('status') == 'resolved' or request.data.get('status') == 'cancelled'):
                 if (milestone):
                     milestone.status = "active"
                     milestone.save()
@@ -500,6 +642,39 @@ class DisputeResponseViewSet(viewsets.ModelViewSet):
       
             else:
                 raise PermissionDenied("You do not have permission to create a dispute response for this contract.")
+            dispute_response_sender = None
+            if(user_client):
+                dispute_response_sender = dispute.client
+            else:   
+                dispute_response_sender = dispute.freelancer
+            notification_description = f"A dispute response has been created for dispute {dispute.title}."
+            email_message = f"You have a response for dispute {dispute.title}"
+            
+            models.Notification.objects.create(
+                    user=dispute_response_sender,
+                    type='alert',
+                    title=f"Dispute Response Created",
+                    description=notification_description
+            )
+            models.Notification.objects.create(
+                    user=dispute.created_by,
+                    type='alert',
+                    title=f"Dispute got response",
+                    description=f"You have a response for dispute {dispute.title}"
+            )
+            subject = "Dispute got Response!"
+    
+            # HTML content for the email
+            html_content = f"""
+            <html>
+                <body>
+                    <p>{email_message}</p>
+                </body>
+            </html>
+            """
+            
+            # Call send_email function with the recipient email, subject, and HTML content
+            send_email(dispute.created_by.email , subject, html_content)
         except PermissionError as e:
             # Handle the case where the user is neither a client nor a freelancer in this contract
             print(f"PermissionError: {e}")
@@ -572,6 +747,28 @@ class DisputeResponseViewSet(viewsets.ModelViewSet):
 
 
 
+class DisputeCheckView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    def get(self, request, *args, **kwargs):
+        dispute_id = request.query_params.get('dispute_id')
+        
+        if not dispute_id:
+            return Response({"detail": "Dispute ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            dispute = models.Dispute.objects.get(id=dispute_id)
+        except models.Dispute.DoesNotExist:
+            return Response({"detail": "Dispute not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if the dispute exists in DrcForwardedDisputes
+        forwarded_dispute = models.DrcForwardedDisputes.objects.filter(dispute=dispute).first()
+        
+        if forwarded_dispute:
+            return Response({"is_in_drc_forwarded": True}, status=status.HTTP_200_OK)
+        else:
+            return Response({"is_in_drc_forwarded": False}, status=status.HTTP_200_OK)
+
 
 
 class DisputeListView(generics.ListAPIView):
@@ -630,11 +827,73 @@ class IsDisputeManager(permissions.BasePermission):
         return request.user.is_authenticated and models.DisputeManager.objects.filter(id=request.user.id).exists()
 
 class ResolvedDrcViewSet(viewsets.ModelViewSet):
-    """Viewset for resolving disputes forwarded to drc"""
+    """Viewset for resolving disputes forwarded to DRC"""
     queryset = models.DrcResolvedDisputes.objects.all()
     serializer_class = serializers.DrcResolvedDisputesSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsDisputeManager]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+
+        # Get created dispute object
+        drc_resolved_dispute = serializer.instance
+
+        # Send Notification
+        client = drc_resolved_dispute.drc_forwarded.dispute.client 
+        freelancer = drc_resolved_dispute.drc_forwarded.dispute.freelancer 
+        # Format notification and email details
+        winner = (
+            "Client" if drc_resolved_dispute.winner == "client" else "Freelancer"
+        )
+        # Initialize the notification description
+        notification_description = "Dispute Resolution Summary:\n"
+
+        # Add fields conditionally
+        if drc_resolved_dispute.title:
+            notification_description += f"- Title: {drc_resolved_dispute.title}\n"
+        if drc_resolved_dispute.winner:
+            notification_description += f"- Winner: {winner}\n"
+        if drc_resolved_dispute.return_type:
+            notification_description += f"- Return Type: {drc_resolved_dispute.return_type}\n"
+        if drc_resolved_dispute.return_amount:
+            notification_description += f"- Return Amount: {drc_resolved_dispute.return_amount}\n"
+        if drc_resolved_dispute.comment:
+            notification_description += f"- Comment: {drc_resolved_dispute.comment}\n"
+        models.Notification.objects.create(
+                    user=client,
+                    type='alert',
+                    title=f"Your dispute has been resolved.",
+                    description=notification_description
+            )
+        models.Notification.objects.create(
+                    user=freelancer,
+                    type='alert',
+                    title=f"Your dispute has been resolved.",
+                    description=notification_description
+            )
+        models.Notification.objects.create(
+                    user=request.user,
+                    type='alert',
+                    title=f"Dispute Resolved",
+                    description=notification_description
+            )
+        # HTML content for the email   
+        html_content = f"""
+        <html>
+            <body>
+                <p>{notification_description}</p>
+            </body>
+        </html>
+        """
+        # Call send_email function with the recipient email, subject, and HTML content
+        send_email(client.email , "Dispute Resolved", html_content)
+        send_email(freelancer.email , "Dispute Resolved", html_content)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
 
 
 class SupportingDocumentView(viewsets.ModelViewSet):
@@ -672,6 +931,16 @@ class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         # Get the best-suited dispute manager based on load and recent activity
         manager = self.get_least_assigned_manager()
+        dispute_id = request.data.get('dispute')
+        dispute = models.Dispute.objects.get(id=dispute_id)
+        user = self.request.user
+        try:
+            user_client = getattr(user, 'client', None)
+            user_freelancer = getattr(user, 'freelancer', None)
+        except PermissionError as e:
+            # Handle the case where the user is neither a client nor a freelancer in this contract
+            print(f"PermissionError: {e}")
+            raise PermissionError("You are not authorized to initiate a dispute for this contract.")
         if not manager:
             return Response(
                 {"error": "No dispute manager available within the weekly assignment limit."},
@@ -686,7 +955,45 @@ class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
+        email_message = f"Dispute {dispute.title} has been forwarded to dispute resolution center."
+        dispute_response_sender = None
+        if(user_client):
+            dispute_response_sender = dispute.client
+        else:   
+            dispute_response_sender = dispute.freelancer
+        models.Notification.objects.create(
+                user=dispute_response_sender,
+                type='alert',
+                title=f"Dispute Response Created",
+                description=email_message
+        )
+        models.Notification.objects.create(
+                user=dispute.created_by,
+                type='alert',
+                title=f"Dispute got response",
+                description=email_message
+        )
+        models.Notification.objects.create(
+                user=manager,
+                type='alert',
+                title=f"Dispute Forwarded to DRC.",
+                description=email_message
+        )
+        subject = "Dispute got Response!"
 
+        # HTML content for the email
+        html_content = f"""
+        <html>
+            <body>
+                <p>{email_message}</p>
+            </body>
+        </html>
+        """
+        
+        # Call send_email function with the recipient email, subject, and HTML content
+        send_email(dispute.created_by.email , subject, html_content)
+        send_email(manager.email , "Dispute Frorwarded to DRC.", html_content)
+        
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):

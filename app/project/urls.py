@@ -26,6 +26,8 @@ router.register('dispute-resolve-drc',views.ResolvedDrcViewSet , basename='dispu
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('freelancer-milestones/project/<uuid:project_id>/', views.FreelancerMilestoneByProjectView.as_view(), name='freelancer-milestones-by-project'),
+    path('freelancer-contract/project/<uuid:project_id>/', views.FreelancerContractByProjectView.as_view(), name='freelancer-contract-by-project'),
     path('milestones/project/<uuid:project_id>/', views.MilestoneByProjectView.as_view(), name='milestones-by-project'),
     path('contracts/<uuid:contract_id>/milestones/', views.MilestoneListViewSet.as_view(), name='contract-milestones'),
     path('counter-offer/<uuid:counter_offer_id>/milestones/', views.CounterOfferMilestoneListViewSet.as_view(), name='counter-offer-milestones'),
@@ -44,6 +46,7 @@ urlpatterns = [
     path('dispute-manager-disputes/',views.DisputeManagerDisputesView.as_view() , name="dispute-manager-disputes") ,   
     path('get-contracts/<uuid:pk>/', views.ContractListView.as_view(), name='contract-list'),
     path('check-active-contract/', views.ActiveContractCheckView.as_view(), name='check-active-contract'),
+    path('check-dispute-in-drc/', views.DisputeCheckView.as_view(), name='check_dispute_in_drc'),
 ]
 
 

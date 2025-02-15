@@ -3,8 +3,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from .utils import extract_text_from_pdf, score_resume_with_chatgpt, send_resume_result_email, create_freelancer_from_resume
-from core.models import Resume, ScreeningResult, ScreeningConfig , Field , Services
-from .serializers import ResumeSerializer, ScreeningResultSerializer, ScreeningConfigSerializer , FieldSerializer , FullAssessmentSerializer
+from core.models import Resume, ScreeningResult, ScreeningConfig , Field , Services , AssessmentTermination , FullAssessment
+from . import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
@@ -28,18 +28,22 @@ from core import models
 from django.conf import settings
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from rest_framework.generics import RetrieveUpdateAPIView
+from django.utils.timezone import now
+from rest_framework.exceptions import PermissionDenied
+
 
 
 class ResumeViewSet(viewsets.ModelViewSet):
     queryset = Resume.objects.all()
-    serializer_class = ResumeSerializer
+    serializer_class = serializers.ResumeSerializer
 
     def create(self, request, *args, **kwargs):
         email = request.data.get('email', None)  # Get the email from the request data
-
-        # Check if the email is already associated with a resume
-        if Resume.objects.filter(email=email).exists():
-            raise ValidationError({"email": "This email address is already used."})
+        is_email_verified = request.data.get('is_email_verified',None)
+        # # Check if the email is already associated with a resume
+        # if Resume.objects.filter(email=email).exists():
+        #     raise ValidationError({"email": "This email address is already used."})
 
         # Generate a verification token and save it
         verification_token = get_random_string(32)
@@ -50,7 +54,8 @@ class ResumeViewSet(viewsets.ModelViewSet):
         resume.verification_token = verification_token
         resume.save()
         # Send the verification email
-        send_verification_email(resume)
+        if(not is_email_verified):
+            send_verification_email(resume)
 
         return Response(
             {"message": "Verification email sent. Please verify your email to continue."},
@@ -190,6 +195,58 @@ class ResumeViewSet(viewsets.ModelViewSet):
 
 #     return Response(response_data, status=status.HTTP_200_OK)
 
+
+from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework import status
+from django.db.models import Count, Q, F
+
+def send_resume_for_screening(resume):
+    resume_text = extract_text_from_pdf(resume.resume_file.path)
+    applied_positions = resume.applied_positions.all()
+    positions_applied_for = [position.name for position in applied_positions]
+
+    score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
+
+    screening_results = []
+    passed_any = False
+
+    for position, result in score_result.items():
+        score = result.get('score', 0)
+        comment = result.get('comment', '')
+        passed = score >= 50
+        if passed:
+            passed_any = True
+        service = Services.objects.get(name__iexact=position)
+        
+        screening_result = ScreeningResult.objects.create(
+            resume=resume,
+            score=score,
+            passed=passed,
+            comments=comment,
+            position=service
+        )
+        screening_results.append(screening_result)
+
+    if passed_any:
+        # Find an available ResumeChecker
+        today = timezone.now().date()
+        available_checker = models.ResumeChecker.objects.filter(
+            resume_checks__done=False
+        ).annotate(
+            checks_today=Count('resume_checks', filter=Q(resume_checks__created_at__date=today))
+        ).filter(checks_today__lt=F('max_resume_check_per_day')).first()
+
+        if available_checker:
+            # Assign the Resume to the ResumeChecker
+            models.ResumeCheck.objects.create(
+                resumechecker=available_checker,
+                resume=resume,
+                done=False  # Screening not completed yet
+            )
+
+
+
 from uuid import UUID
 
 
@@ -211,7 +268,7 @@ def verify_email(request):
 
     if resume.verification_token != token:
         return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     resume.is_email_verified = True
     resume.verification_token = ""
     resume.save()
@@ -224,6 +281,8 @@ def verify_email(request):
     score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
 
     screening_results = []
+    resume_check_assigned = False  # Track if we assigned a ResumeChecker
+
     for position, result in score_result.items():
         score = result.get('score', 0)
         comment = result.get('comment', '')
@@ -238,18 +297,22 @@ def verify_email(request):
         )
         screening_results.append(screening_result)
 
-    freelancer = None
-    if any(result['score'] >= 50 for result in score_result.values()):
-        freelancer = create_freelancer_from_resume(resume, applied_positions)
-        freelancer.email_verified = True
-        freelancer.save()
-    screening_result_serializer = ScreeningResultSerializer(screening_results, many=True)
+        # Assign a ResumeCheck if passed (only once)
+        if passed and not resume_check_assigned:
+            resume_checker = models.ResumeChecker.objects.annotate(
+                check_count=Count('resume_checks', filter=Q(resume_checks__done=False))
+            ).order_by('check_count').first()
+
+            if resume_checker:
+                models.ResumeCheck.objects.create(resumechecker=resume_checker, resume=resume, passed=False)
+                resume_check_assigned = True
+
+    screening_result_serializer = serializers.ScreeningResultSerializer(screening_results, many=True)
+    
     response_data = {
         "message": "Email verified and watch out your email for your application result.",
         "screening_results": screening_result_serializer.data,
     }
-    if freelancer:
-        response_data["freelancer_created"] = True
 
     return Response(response_data, status=status.HTTP_200_OK)
 
@@ -378,18 +441,20 @@ def addFreelancerSkills(freelancer_id , selected_technologies):
 
 
 @api_view(['PATCH'])
-def activate_full_assessment(request, freelancer_id):
+def activate_full_assessment(request, resume_id):
     try:
         # Data passed in the request body with applied positions and corresponding statuses
         modal_data = request.data.get('modalData', None)  # or `modalData` key, depending on structure
         selected_technologies = request.data.get('selectedTechnologies', {})
-
+        resume = models.Resume.objects.get(id=resume_id)
+        resume_check = models.ResumeCheck.objects.get(resume=resume)
+        freelancer = create_freelancer_from_resume(resume,resume.applied_positions.all())
         # Iterate over each applied position's ID and its corresponding assessment statuses
         for position_id, status_data in modal_data.items():
             try:
                 # Fetch the FullAssessment object for the given position_id and freelancer_id
                 full_assessment = models.FullAssessment.objects.get(
-                    freelancer_id=freelancer_id,
+                    freelancer_id=freelancer.id,
                     applied_position_id=position_id
                 )
                 
@@ -400,7 +465,7 @@ def activate_full_assessment(request, freelancer_id):
                 
                 # Set the status to 'pending'
                 full_assessment.status = 'pending'
-                user = models.Freelancer.objects.get(pk=freelancer_id)
+                user = models.Freelancer.objects.get(pk=freelancer.id)
                 # Save the updated FullAssessment object
                 full_assessment.save()
                 notification = models.Notification.objects.create(
@@ -420,14 +485,15 @@ def activate_full_assessment(request, freelancer_id):
                 </html>
                 """
                 send_email(user.email,"Congratualtions you have passed to the first round!",html_content)
-
+                resume_check.done = True
+                resume_check.save()
             except models.FullAssessment.DoesNotExist:
                 return Response(
                     {"detail": f"FullAssessment object not found for position ID {position_id}."},
                     status=status.HTTP_404_NOT_FOUND
                 )
         if (len(selected_technologies.items()) > 0):
-                addFreelancerSkills(freelancer_id , selected_technologies)
+                addFreelancerSkills(freelancer.id , selected_technologies)
         
         # After updating all assessments, return a success response
         # You may choose to return a summary or just a success message
@@ -440,18 +506,19 @@ def activate_full_assessment(request, freelancer_id):
 
 
 @api_view(['PATCH'])
-def approve_freelancer(request, freelancer_id):
+def approve_freelancer(request, resume_id):
     try:
         # Parse the data from the request
         modal_data = request.data.get('modalData', None)
         selected_technologies = request.data.get('selectedTechnologies', {})
-
+        resume = models.Resume.objects.get(id=resume_id)
+        freelancer = create_freelancer_from_resume(resume_id,resume.applied_positions.all())
         # Iterate over applied positions to update assessments
         for position_id, status_data in modal_data.items():
             try:
                 # Fetch the FullAssessment object for the given position_id and freelancer_id
                 full_assessment = models.FullAssessment.objects.get(
-                    freelancer_id=freelancer_id,
+                    freelancer_id=freelancer.id,
                     applied_position_id=position_id
                 )
 
@@ -462,7 +529,7 @@ def approve_freelancer(request, freelancer_id):
                 full_assessment.status = "passed"
                 full_assessment.finished = True
                 full_assessment.save()
-                user = models.Freelancer.objects.get(pk=freelancer_id)
+                user = models.Freelancer.objects.get(pk=freelancer.id)
                 notification = models.Notification.objects.create(
                 user=user,
                 type='alert',
@@ -478,13 +545,16 @@ def approve_freelancer(request, freelancer_id):
                 </html>
                 """
                 send_email(user.email,"You're Approved to join EthioGurus!",html_content)
+                resume_check = models.ResumeCheck.objects.get(resume=resume)
+                resume_check.done = True
+                resume_check.save()
             except models.FullAssessment.DoesNotExist:
                 return Response(
                     {"detail": f"FullAssessment object not found for position ID {position_id}."},
                     status=status.HTTP_404_NOT_FOUND
                 )
         if (len(selected_technologies.items()) > 0):
-            addFreelancerSkills(freelancer_id , selected_technologies)
+            addFreelancerSkills(freelancer.id , selected_technologies)
         return Response(
             {"detail": "Full assessments activated and freelancer skills updated successfully."},
             status=status.HTTP_200_OK
@@ -492,7 +562,7 @@ def approve_freelancer(request, freelancer_id):
 
     except models.Freelancer.DoesNotExist:
         return Response(
-            {"detail": f"Freelancer with ID {freelancer_id} not found."},
+            {"detail": f"Freelancer with ID {freelancer.id} not found."},
             status=status.HTTP_404_NOT_FOUND
         )
     except models.Service.DoesNotExist as e:
@@ -557,7 +627,7 @@ def assign_soft_skills_assessment_appointment(request, freelancer_id):
             notification.save()
 
             # Return the updated FullAssessment object along with appointment details
-            serializer = FullAssessmentSerializer(full_assessment)
+            serializer = serializers.FullAssessmentSerializer(full_assessment)
             
             return Response({
                 "assessment": serializer.data,
@@ -627,18 +697,17 @@ def assign_live_assessment_appointment(request, freelancer_id):
             notification.save()
             message="Congratulations, You've passed the depth skill assessment and moved to the live Assessment! Please select your appointment date by loggin in..",
             subject = 'Interview appointment Notification'
-            message_ = f'Dear {full_assessment.freelancer.full_name},\n\n {message}".\n\nThank you for your continued efforts.'
             html_content = f"""
                 <html>
                 <body>
-                <p>{message_}</p>
+                <p>{message}</p>
                 </body>
                 </html>
                 """
             send_email(full_assessment.freelancer.email, subject, html_content)
 
             # Return the updated FullAssessment object along with appointment details
-            serializer = FullAssessmentSerializer(full_assessment)
+            serializer = serializers.FullAssessmentSerializer(full_assessment)
             
             return Response({
                 "assessment": serializer.data,
@@ -667,15 +736,15 @@ def assign_live_assessment_appointment(request, freelancer_id):
 
 class ScreeningResultViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ScreeningResult.objects.all()
-    serializer_class = ScreeningResultSerializer
+    serializer_class = serializers.ScreeningResultSerializer
 
 class ScreeningConfigViewSet(viewsets.ModelViewSet):
     queryset = ScreeningConfig.objects.all()
-    serializer_class = ScreeningConfigSerializer
+    serializer_class = serializers.ScreeningConfigSerializer
 
 class FieldViewSet(viewsets.ModelViewSet):
     queryset = Field.objects.all()
-    serializer_class = FieldSerializer
+    serializer_class = serializers.FieldSerializer
 
 class FullAssessmentViewSet(viewsets.ModelViewSet):
     """
@@ -683,7 +752,7 @@ class FullAssessmentViewSet(viewsets.ModelViewSet):
     Provides list, retrieve, create, update, and delete actions.
     """
     queryset = models.FullAssessment.objects.all()
-    serializer_class = FullAssessmentSerializer
+    serializer_class = serializers.FullAssessmentSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -735,7 +804,7 @@ class FreelancerFullAssessmentView(APIView):
         except models.FullAssessment.DoesNotExist:
             return Response({"error": "Full assessment not found for the given freelancer."}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = FullAssessmentSerializer(full_assessment)
+        serializer = serializers.FullAssessmentSerializer(full_assessment)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -756,7 +825,7 @@ class FullAssessmentUpdateView(APIView):
         # Validate and update each FullAssessment record
         updated_assessments = []
         for assessment in full_assessments:
-            serializer = FullAssessmentSerializer(assessment, data=request.data, partial=True)
+            serializer = serializers.FullAssessmentSerializer(assessment, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
                 updated_assessments.append(serializer.data)
@@ -770,7 +839,7 @@ class FullAssessmentUpdateView(APIView):
         elif "live_assessment_status" in request.data:
             message = f"you have passed live interview assessment."
         freelancer = models.Freelancer.objects.get(pk=freelancer_id)
-        self.send_assessment_update_email(freelancer , message)
+        send_assessment_update_email(freelancer , message)
         return Response(updated_assessments, status=status.HTTP_200_OK)
 
 
@@ -895,43 +964,145 @@ def generate_appointment_date_options(interviewers):
         return date_options
 
 
+
+
 class NotStartedAssessmentsView(APIView):
     """
-    API endpoint to fetch Resumes and ScreeningResults for assessments that have not started.
+    API endpoint to fetch Resumes and ScreeningResults for assessments assigned to the authenticated ResumeChecker.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         try:
-            # Query FullAssessment objects with not_started statuses
-            full_assessments = models.FullAssessment.objects.filter(
-                status='not_started',
+            # Ensure user is a ResumeChecker
+            if not hasattr(request.user, "resumechecker"):
+                raise PermissionDenied("Only ResumeCheckers can access this resource.")
+
+            resume_checker = request.user.resumechecker  # Get the authenticated ResumeChecker
+
+            # Get Resumes assigned to this ResumeChecker (not started yet)
+            assigned_resume_checks = models.ResumeCheck.objects.filter(
+                resumechecker=resume_checker, done=False  # Not completed yet
             )
 
-            # Get the freelancer emails from the filtered FullAssessments
-            freelancer_emails = full_assessments.values_list('freelancer__email', flat=True).distinct()
+            # Get list of assigned Resumes
+            assigned_resumes = Resume.objects.filter(id__in=assigned_resume_checks.values_list('resume_id', flat=True))
 
-            # Query Resumes that match the freelancer emails
-            resumes = Resume.objects.filter(email__in=freelancer_emails)
+            # Filter FullAssessments that match these resumes and are "not_started"
+            full_assessments = FullAssessment.objects.filter(
+                status='not_started',
+                freelancer__email__in=assigned_resumes.values_list("email", flat=True)
+            )
 
-            # Query ScreeningResults linked to the filtered Resumes
-            screening_results = ScreeningResult.objects.filter(resume__in=resumes)
+            # Get ScreeningResults linked to assigned Resumes
+            screening_results = ScreeningResult.objects.filter(resume__in=assigned_resumes)
 
             # Serialize data
-            resumes_serializer = ResumeSerializer(resumes, many=True)
-            screening_results_serializer = ScreeningResultSerializer(screening_results, many=True)
-            full_assessments_serializer = FullAssessmentSerializer(full_assessments , many=True)
-            # Return response
+            resumes_serializer = serializers.ResumeSerializer(assigned_resumes, many=True)
+            screening_results_serializer = serializers.ScreeningResultSerializer(screening_results, many=True)
+            full_assessments_serializer = serializers.FullAssessmentSerializer(full_assessments, many=True)
+
             return Response(
                 {
                     "resumes": resumes_serializer.data,
                     "screening_results": screening_results_serializer.data,
-                    "full_assesments":full_assessments_serializer.data,
+                    "full_assessments": full_assessments_serializer.data,
                 },
                 status=status.HTTP_200_OK,
             )
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
+
+
+
+class AssessmentTerminationView(RetrieveUpdateAPIView):
+    """
+    API View to get or update a freelancer's assessment termination count.
+    If the termination count reaches 3, all active assessments will be put on hold until a set date.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = serializers.AssessmentTerminationSerializer
+
+    def get_object(self):
+        freelancer_id = self.request.query_params.get("freelancer_id")
+        if not freelancer_id:
+            return None
+
+        return AssessmentTermination.objects.filter(freelancer_id=freelancer_id).first()
+
+    def patch(self, request, *args, **kwargs):
+        freelancer_id = request.data.get("freelancer_id")
+        if not freelancer_id:
+            return Response({"error": "Freelancer ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        assessment_termination, created = AssessmentTermination.objects.get_or_create(
+            freelancer_id=freelancer_id
+        )
+
+        # Increment termination count
+        assessment_termination.termination_count += 1
+        assessment_termination.save()
+
+        # Check if termination count reaches 3
+        if assessment_termination.termination_count >= 3:
+            hold_duration = timedelta(days=120)  # Hold for 120 days
+            hold_expiry = now() + hold_duration  # Calculate exact hold expiration date
+
+            FullAssessment.objects.filter(
+                freelancer_id=freelancer_id,
+                finished=False,  # Only apply to active assessments
+                on_hold=False  # Ensure we don't reapply hold
+            ).update(
+                status="on_hold",
+                on_hold=True,
+                hold_until=hold_expiry,  # Store exact expiry date
+                updated_at=now()
+            )
+
+        serializer = self.get_serializer(assessment_termination)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+class ApplicationOnHoldViewSet(viewsets.ModelViewSet):
+    queryset = models.ApplicationOnHold.objects.all()
+    serializer_class = serializers.ApplicationOnHoldSerializer
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+
+    def perform_create(self, serializer):
+        """Override to handle additional logic during creation."""
+        application_on_hold = serializer.save()
+
+        # Extract necessary details
+        email = application_on_hold.email
+        position = application_on_hold.position
+        hold_until = application_on_hold.hold_until
+        rejection_reason = getattr(application_on_hold, "rejection_reason", None)  # Ensure field exists
+
+        # Format hold_until date as "July 20, 2023"
+        hold_until_date = hold_until.strftime("%B %d, %Y") if hold_until else "a later date"
+
+        # Construct email content dynamically
+        email_subject = "Application Not Accepted"
+        email_content = (
+            f"Dear Applicant,\n\n"
+            f"Your application for the position '{position}' has not been accepted.\n"
+        )
+
+        if rejection_reason:  # Add reason only if provided
+            email_content += f"Reason: {rejection_reason}\n"
+
+        email_content += f"You may reapply after {hold_until_date}.\n\nBest regards,\nRecruitment Team"
+
+        # Send email notification
+        send_email(email, email_subject, email_content)
+
+        

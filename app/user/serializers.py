@@ -220,3 +220,16 @@ class PasswordChangeSerializer(serializers.Serializer):
         user.set_password(new_password)
         user.save()
         return user
+
+
+class SignUpListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.SignUpList
+        fields = ['id', 'full_name', 'email', 'created_at']
+
+class WaitlistSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.Waitlist
+        fields = "__all__"
+
+

@@ -10,6 +10,7 @@ router.register('freelancer', views.FreelancerViewSet )
 router.register('client', views.ClientViewSet)
 router.register('notifications', views.NotificationViewSet, basename='notification')
 router.register('message', views.MessageViewSet, basename='message')
+
 urlpatterns = [
     path('clientFreelancerChat/', views.ChatBetweenClientFreelancerView.as_view(), name='chat-client-freelancer'),
     path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
@@ -43,6 +44,8 @@ urlpatterns = [
     # path('client/<int:pk>/', views.ManageClientDetailView.as_view(), name='client-detail'),
     # path('freelancer/<int:pk>/', views.ManageFreelancerDetailView.as_view(), name='freelancer-detail'),
     path('send-verification-link/', views.send_email_verification_link, name='send-verification-link'),
-
+    path('send-email/', views.send_email_, name='send-email'),
+    path('sign-up/', views.sign_up, name='sign_up'),
+    path("waitlist/", views.WaitlistCreateView.as_view(), name="waitlist"),
     path('', include(router.urls)),
 ]

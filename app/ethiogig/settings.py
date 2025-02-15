@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'drf_spectacular',
     'rest_framework_simplejwt',
+    'django_celery_beat',
     'project',
     'resume',
     'services',
@@ -50,6 +51,15 @@ INSTALLED_APPS = [
     'interview',
     'assessment',
 ]
+
+
+CELERY_BROKER_URL = 'redis://redis:6379/0'
+CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
