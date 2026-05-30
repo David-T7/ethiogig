@@ -102,12 +102,14 @@ Authentication: JWT Bearer tokens (SimpleJWT) — 60-day access, 120-day refresh
 
 ## Freelancer Vetting Pipeline
 
+### Current pipeline
+
 ```
 Resume Submitted
       ↓
 AI Screening (Gemini)  ←  ScreeningConfig defines criteria per position
       ↓
-ResumeChecker Review   ←  Admin assigns ResumeChecker; result stored in ResumeCheck
+ResumeChecker Review   ←  Auto-assigned by capacity; result stored in ResumeCheck
       ↓
 FullAssessment Created
       ├── soft_skills  (Interviewer — soft skills type)
@@ -117,6 +119,32 @@ FullAssessment Created
       ↓
 Freelancer Approved / Rejected
 ```
+
+### Planned pipeline (issue [#1](https://github.com/David-T7/ethiogig/issues/1))
+
+The goal is Toptal-style strictness (top ~3% acceptance) using cheapest-first progressive elimination so human reviewers only see the strongest candidates.
+
+```
+Resume Submitted
+      ↓
+Stage 1 — AI Screening (Gemini)         ← threshold: 60 (currently 50)
+      ↓
+Stage 2 — Automated Skills Test         ← timed, auto-graded; top 30% pass  [NOT BUILT]
+      ↓
+Stage 3 — Async Video Screening         ← Gemini scores transcript           [NOT BUILT]
+      ↓
+Stage 4 — ResumeChecker Review          ← small, high-quality pool by now
+      ↓
+Stage 5 — FullAssessment (soft/depth/live)
+      ↓
+Stage 6 — Test Project (4–6 hr task)    ← auto-evaluated with unit tests     [NOT BUILT]
+      ↓
+Freelancer Approved / Rejected
+```
+
+**Models needed:** `SkillsTest`, `SkillsTestSubmission`, `VideoScreening`, `TestProject`  
+**Fields to add on `FullAssessment`:** `test_score`, `video_score`  
+**Priority:** Stage 2 (automated skills test) has the highest ROI — implement first.
 
 ---
 
@@ -136,8 +164,8 @@ Beat schedule is stored in the database (`django_celery_beat`) and seeded by `se
 
 | Integration | Package | Usage |
 |---|---|---|
-| Google Gemini AI | `google-generativeai` | Resume screening in `resume/utils.py` |
-| SendGrid / Brevo | `django-sendgrid-v5` | Transactional email (verification, password reset, notifications) |
+| Google Gemini AI | `google-generativeai` | Resume screening in `resume/utils.py`; planned for video transcript scoring |
+| Brevo (SMTP) | `django` `EmailMultiAlternatives` | Transactional email — verification, password reset, notifications |
 | AWS S3 | `boto3` | File/document storage |
 | SimpleJWT | `djangorestframework-simplejwt` | Token-based auth |
 | drf-spectacular | `drf-spectacular` | Auto-generated OpenAPI/Swagger docs |
@@ -150,7 +178,7 @@ Beat schedule is stored in the database (`django_celery_beat`) and seeded by `se
 - **REST framework style:** Views use DRF `GenericAPIView`, `ModelViewSet`, and `APIView`. Serializers live in `<app>/serializers.py`.
 - **Permissions:** `IsAuthenticated` is the default. Role checks are done inside view logic by detecting the model type (e.g., `hasattr(user, 'freelancer')`).
 - **Signals / hooks:** Not used — business logic lives in views and tasks.
-- **Migrations:** Two pending untracked migrations in `core/migrations/` (`0101`, `0102`) — run `migrate` after pulling.
+- **Migrations:** Always run `migrate` after pulling — new migrations may have been added to `core/migrations/`.
 - **No comments by default:** Code is self-documenting via naming. Only add a comment when the *why* is non-obvious.
 
 ---
