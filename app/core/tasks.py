@@ -1,6 +1,6 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import FullAssessment
+from .models import FullAssessment , ApplicationOnHold
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.conf import settings
@@ -55,3 +55,26 @@ def update_expired_holds():
         # Call send_email function with the recipient email, subject, and HTML content
         send_email(assessment.freelancer.email, subject, html_content)
     
+@shared_task
+def remove_expired_holds():
+    now = timezone.now()
+    expired_holds = ApplicationOnHold.objects.filter(hold_until__lte=now)
+
+    for hold in expired_holds:
+        # Email details
+        subject = "You can now apply for your desired position!"
+        position_name = hold.position.name if hold.position else "the position"
+        html_content = f"""
+        <html>
+            <body>
+                <p>Good news! You can now apply for <strong>{position_name}</strong> again.</p>
+                <p>Visit our platform to submit your application.</p>
+            </body>
+        </html>
+        """
+        
+        # Send email
+        send_email(hold.email, subject, html_content)
+        
+        # Delete the hold entry
+        hold.delete()

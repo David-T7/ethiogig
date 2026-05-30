@@ -61,6 +61,20 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Media / user uploads
+media/
+resumes/
+profile_pictures/
+staticfiles/
+static/
+
+# Docker volumes
+postgres_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Flask stuff:
 instance/
 .webassets-cache

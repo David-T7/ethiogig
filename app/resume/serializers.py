@@ -3,7 +3,7 @@ from core import models
 class ResumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Resume
-        fields = ['id', 'full_name','password','email','is_email_verified','applied_positions', 'resume_file', 'uploaded_at']
+        fields = ['id', 'full_name','password','email','is_email_verified','applied_position','verification_token','resume_file', 'uploaded_at']
         read_only_fields = ['id','uploaded_at']
         extra_kwargs = {'password': {'write_only': True, 'min_length': 5}}
 

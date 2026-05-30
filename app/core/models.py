@@ -544,7 +544,7 @@ class Resume(models.Model):
     full_name = models.CharField(max_length=50)
     email = models.EmailField(unique=False)
     is_email_verified = models.BooleanField(default=False)
-    applied_positions =  models.ManyToManyField("Services")
+    applied_position = models.ForeignKey('Services', on_delete=models.SET_NULL, null=True)
     resume_file = models.FileField(upload_to='resumes/')
     uploaded_at = models.DateTimeField(auto_now_add=True)
     password = models.CharField(max_length=128 , null=False)  # Password field
@@ -569,6 +569,8 @@ class ResumeCheck(models.Model):
     passed = models.BooleanField(default=False)  # Whether the freelancer passed the interview
     feedback = models.TextField(blank=True, null=True)  # Interviewer's feedback on the interview
     done = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
     def __str__(self):
         return f"Resume Check for Freelancer {self.resume.full_name} with Resume Checker {self.resumechecker.full_name}"
 

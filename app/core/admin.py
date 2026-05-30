@@ -20,6 +20,41 @@ class UserAdmin(BaseUserAdmin):
         }),
     )
 
+class StaffUserAdmin(BaseUserAdmin):
+    ordering = ['id']
+    list_display = ['email', 'full_name']
+    fieldsets = (
+        (None, {'fields': ('email', 'password')}),
+        (_('Personal Info'), {'fields': ('full_name', 'phone_number')}),
+        (_('Permissions'), {'fields': ('is_active', 'is_staff', 'is_superuser')}),
+        (_('Important dates'), {'fields': ('last_login', 'date_joined')}),
+    )
+    readonly_fields = ['last_login', 'date_joined']
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('email', 'full_name', 'password1', 'password2', 'is_active', 'is_staff'),
+        }),
+    )
+
+class InterviewerAdmin(StaffUserAdmin):
+    fieldsets = StaffUserAdmin.fieldsets + (
+        (_('Interviewer Details'), {'fields': ('expertise', 'interviews_per_week', 'max_interviews_per_day', 'working_hours_start', 'working_hours_end', 'type')}),
+    )
+    add_fieldsets = StaffUserAdmin.add_fieldsets
+
+class ResumeCheckerAdmin(StaffUserAdmin):
+    fieldsets = StaffUserAdmin.fieldsets + (
+        (_('Resume Checker Details'), {'fields': ('resume_check_per_week', 'max_resume_check_per_day', 'working_hours_start', 'working_hours_end')}),
+    )
+    add_fieldsets = StaffUserAdmin.add_fieldsets
+
+class DisputeManagerAdmin(StaffUserAdmin):
+    fieldsets = StaffUserAdmin.fieldsets + (
+        (_('Dispute Manager Details'), {'fields': ('dispute_per_week',)}),
+    )
+    add_fieldsets = StaffUserAdmin.add_fieldsets
+
 class FreelancerAdmin(admin.ModelAdmin):
     ordering = ['id']
     list_display = ['email', 'full_name', 'verified', 'hourly_rate']
@@ -59,7 +94,7 @@ admin.site.register(models.Services)
 admin.site.register(models.Technology)
 admin.site.register(models.Notification)
 admin.site.register(models.Appointment)
-admin.site.register(models.Interviewer)
+admin.site.register(models.Interviewer, InterviewerAdmin)
 admin.site.register(models.FreelancerInterview)
 admin.site.register(models.SkillSearch)
 admin.site.register(models.Chat)
@@ -70,11 +105,11 @@ admin.site.register(models.Dispute)
 admin.site.register(models.CounterOffer)
 admin.site.register(models.CounterOfferMilestone)
 admin.site.register(models.DrcForwardedDisputes)
-admin.site.register(models.DisputeManager)
+admin.site.register(models.DisputeManager, DisputeManagerAdmin)
 admin.site.register(models.DrcResolvedDisputes)
 admin.site.register(models.FullAssessment)
 admin.site.register(models.Field)
-admin.site.register(models.ResumeChecker)
+admin.site.register(models.ResumeChecker, ResumeCheckerAdmin)
 admin.site.register(models.Project)
 admin.site.register(models.Waitlist)
 admin.site.register(models.SignUpList)

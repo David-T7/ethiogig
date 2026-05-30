@@ -1,28 +1,23 @@
 import json
-import pypdf
 import os
 import google.generativeai as genai
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 from core import models
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
-
-# Configure the API key for generative AI
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-
 from pypdf import PdfReader
 
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+
 def extract_text_from_pdf(pdf_path):
-    """Extract text from a PDF file."""
     text = ''
     print("Started extracting")
     try:
         reader = PdfReader(pdf_path)
-        number_of_pages = len(reader.pages)
-        for page_num in range(number_of_pages):
-            page = reader.pages[page_num]
+        for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
                 text += page_text
@@ -31,15 +26,12 @@ def extract_text_from_pdf(pdf_path):
     print("Finished extracting")
     return text
 
-def score_resume_with_chatgpt(resume_text, positions_applied_for):
-    """Score a resume using the ChatGPT model."""
 
-    positions_list = ', '.join(positions_applied_for)  # Create a string of all positions
-
+def score_resume_with_gemini(resume_text, position_applied_for):
     prompt = f"""
     You are a hiring expert for top freelancing sites. Given the following resume text and the positions applied for, please evaluate it based on these criteria and provide a score from 0 to 100 along with a comment for each position:
 
-    Positions Applied For: {positions_list}
+    Position Applied For: {position_applied_for}
 
     Criteria:
     - Relevant Experience: Number of years in the specific field or similar roles.
@@ -51,7 +43,7 @@ def score_resume_with_chatgpt(resume_text, positions_applied_for):
     Resume Text:
     {resume_text}
 
-    For each position, please return the score and a comment in this format:
+    please return the score and a comment in this format:
     {{
         "position_name": {{"score": float, "comment": string}},
         "position_name": {{"score": float, "comment": string}},
@@ -61,120 +53,94 @@ def score_resume_with_chatgpt(resume_text, positions_applied_for):
     prompt += "\nResponse format:\n{\"position_name\": {\"score\": float, \"comment\": string}}"
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')  # Ensure this model name is correct
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
-        
-        evaluation_json = parse_json_from_response(response.text)
-        return evaluation_json  # Return the evaluation as is
+        return parse_json_from_response(response.text)
     except Exception as e:
         print(f"Error scoring resume with AI: {e}")
         return {'error': 'Error occurred during scoring.'}
 
 
-
 def parse_json_from_response(response_text):
-    """Parse JSON from the AI response text."""
-    # Clean up the response text and ensure it's valid JSON format
     json_text = response_text.strip().strip('```json').strip('```').strip()
-
     try:
-        # Attempt to parse the JSON
         return json.loads(json_text)
     except json.JSONDecodeError:
         print(f"Failed to parse JSON from response: {response_text}")
         return {}
 
 
+def _send_email(to_email, subject, html_content):
+    text_content = "Please view this email in an HTML-compatible email client."
+    email_message = EmailMultiAlternatives(
+        subject=subject,
+        body=text_content,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[to_email],
+    )
+    email_message.attach_alternative(html_content, "text/html")
+    try:
+        email_message.send(fail_silently=False)
+        print("email sent")
+    except Exception as e:
+        print(f"Error sending email: {e}")
 
 
 def send_resume_result_email(user_email, score, passed, comments):
-    subject = 'Your Resume Screening Result'
-    print("mail started sening")
     if passed:
-        message = f'Congratulations! Your resume has passed the screening with a score of {score}.\n\nComments: {comments}'
+        body = f'Congratulations! Your resume has passed the screening with a score of {score}.\n\nComments: {comments}'
     else:
-        message = f'We regret to inform you that your resume did not pass the screening. Your score is {score}.\n\nComments: {comments}'
-    
-    send_mail(
-        subject,
-        message,
-        settings.DEFAULT_FROM_EMAIL,
-        [user_email],
-        fail_silently=False,
-    )
-    print("mail sent")
+        body = f'We regret to inform you that your resume did not pass the screening. Your score is {score}.\n\nComments: {comments}'
+
+    html_content = f"<html><body><p>{body}</p></body></html>"
+    _send_email(user_email, 'Your Resume Screening Result', html_content)
 
 
 def generate_password_reset_link(user):
-    """Generate a password reset link."""
     token = default_token_generator.make_token(user)
     uid = urlsafe_base64_encode(force_bytes(user.pk))
-    reset_link = f"http://127.0.0.1:8000/api/resume/reset-password/{uid}/{token}/"
-    return reset_link
+    return f"{settings.FRONTEND_URL}reset-password/{uid}/{token}/"
+
 
 def send_password_reset_email(user_email):
-    """Generate a password reset link and send it to the user's email."""
     try:
         user = models.User.objects.get(email=user_email)
     except models.User.DoesNotExist:
         print(f"No user found with email {user_email}")
         return
-    
-    reset_link = generate_password_reset_link(user)
-    subject = 'Password Reset Request'
-    message = f'Click the following link to reset your password: {reset_link}'
 
-    send_mail(
-        subject,
-        message,
-        settings.DEFAULT_FROM_EMAIL,
-        [user_email],
-        fail_silently=False,
-    )
+    reset_link = generate_password_reset_link(user)
+    html_content = f"""
+    <html>
+        <body>
+            <p>Click the following link to reset your password:</p>
+            <a href="{reset_link}">{reset_link}</a>
+        </body>
+    </html>
+    """
+    _send_email(user_email, 'Password Reset Request', html_content)
     print(f"Password reset link sent to {user_email}")
 
-from django.contrib.auth import authenticate
 
-def create_freelancer_from_resume(resume, applied_positions):
-    """Create a Freelancer from a passed resume and send a password reset link."""
+def create_freelancer_from_resume(resume):
     user_email = resume.email
 
-    # Create or update Freelancer profile
     freelancer, freelancer_created = models.Freelancer.objects.get_or_create(
         email=user_email,
-        defaults={
-            'full_name': resume.full_name,
-            # Add other fields like bio, portfolio, skills, etc. here
-        }
+        defaults={'full_name': resume.full_name},
+    )
+    if freelancer_created:
+        freelancer.email_verified = True
+        freelancer.save()
+
+    if resume.password:
+        freelancer.password = resume.password
+        freelancer.save()
+
+    models.FullAssessment.objects.get_or_create(
+        freelancer=freelancer,
+        applied_position=resume.applied_position,
     )
 
-    # After ensuring the Freelancer is created or updated, handle User (password)
-    user = freelancer  # Freelancer is a subclass of User, so it's the same object
-
-    # Set the password and save the user only if a password is provided
-    if resume.password:
-        print(f"Setting password for {user_email}")
-        user.set_password(resume.password)
-        user.save()  # Save after setting the password
-
-        # Debugging: Check the hashed password
-        print(f"Hashed password for user: {user.password}")
-
-        # Optionally: Authenticate the user here, if necessary
-        # user_authenticated = authenticate(email=user.email, password=resume.password)
-        # if user_authenticated is not None:
-        #     print("User authenticated")
-        # else:
-        #     print("Authentication failed")
-
-    # Create FullAssessment objects based on the applied positions
-    for applied_position in applied_positions:
-        assessment = models.FullAssessment.objects.get_or_create(
-            freelancer=freelancer,
-            applied_position=applied_position
-        )
-    
-    # Debugging
     print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.full_name}")
-
     return freelancer

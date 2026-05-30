@@ -2,7 +2,7 @@ import uuid
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from .utils import extract_text_from_pdf, score_resume_with_chatgpt, send_resume_result_email, create_freelancer_from_resume
+from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_result_email, create_freelancer_from_resume
 from core.models import Resume, ScreeningResult, ScreeningConfig , Field , Services , AssessmentTermination , FullAssessment
 from . import serializers
 from rest_framework.permissions import AllowAny
@@ -26,233 +26,152 @@ from django.utils.crypto import get_random_string
 from rest_framework.decorators import action
 from core import models
 from django.conf import settings
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from django.db.models import Count, Q, F
 from rest_framework.generics import RetrieveUpdateAPIView
 from django.utils.timezone import now
 from rest_framework.exceptions import PermissionDenied
-
-
+from django.contrib.auth.hashers import make_password
+from uuid import UUID
+from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework import status
+from django.core.mail import EmailMultiAlternatives
 
 class ResumeViewSet(viewsets.ModelViewSet):
     queryset = Resume.objects.all()
     serializer_class = serializers.ResumeSerializer
 
     def create(self, request, *args, **kwargs):
-        email = request.data.get('email', None)  # Get the email from the request data
-        is_email_verified = request.data.get('is_email_verified',None)
-        # # Check if the email is already associated with a resume
-        # if Resume.objects.filter(email=email).exists():
-        #     raise ValidationError({"email": "This email address is already used."})
+        email = request.data.get('email')
+        is_email_verified = request.data.get('is_email_verified', None)
+        services = request.data.getlist('applied_positions', [])  # Multiple services
+        password = request.data.get('password')
 
-        # Generate a verification token and save it
-        verification_token = get_random_string(32)
-        resume_data = request.data.copy()
-        serializer = self.get_serializer(data=resume_data)
-        serializer.is_valid(raise_exception=True)
-        resume = serializer.save()
-        resume.verification_token = verification_token
-        resume.save()
-        # Send the verification email
-        if(not is_email_verified):
-            send_verification_email(resume)
+        if not services:
+            return Response({"error": "At least one service must be selected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch valid service objects
+        valid_services = Services.objects.filter(id__in=services)
+        if not valid_services:
+            return Response({"error": "Selected services do not exist."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if there are any applications on hold for this email and the applied positions
+        on_hold_positions = models.ApplicationOnHold.objects.filter(email=email, position__in=valid_services).values_list("position__name", flat=True)
+        
+        if on_hold_positions:
+            return Response(
+                {"error": "Your application is currently on hold for the following positions:", "positions": list(on_hold_positions)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        resumes = []
+        verification_token = get_random_string(32)  # One token for all resumes
+        hashed_password = make_password(password)  # Hash password once
+
+        for service in valid_services:
+            resume_data = request.data.copy()
+            resume_data["applied_position"] = service.id
+            resume_data["verification_token"] = verification_token
+            resume_data["password"] = hashed_password  # Assign hashed password
+
+            serializer = self.get_serializer(data=resume_data)
+            serializer.is_valid(raise_exception=True)
+            resume = serializer.save()
+            send_resume_for_screening(resume)
+            resumes.append(resume)
 
         return Response(
-            {"message": "Verification email sent. Please verify your email to continue."},
+            "Application was successful. Please wait for the evaluation to complete. We will contact you soon.",
             status=status.HTTP_201_CREATED,
         )
 
-    # @action(detail=True, methods=['post'], url_path='verify-email')
-    # def verify_email(self, request, pk=None):
-    #     resume = self.get_object()
-    #     token = request.data.get('token')
-
-    #     if not token or resume.verification_token != token:
-    #         return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
-
-    #     # Mark the email as verified
-    #     resume.email_verified = True
-    #     resume.save()
-
-    #     # Continue with screening and freelancer creation
-    #     resume_text = extract_text_from_pdf(resume.resume_file.path)  # Extract text from the PDF resume
-    #     applied_positions = resume.applied_positions.all()  # Get all applied positions (Services)
-    #     positions_applied_for = [position.name for position in applied_positions]
-
-    #     score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
-
-    #     # Iterate through the score_result dictionary to create ScreeningResult for each position
-    #     screening_results = []
-    #     for position, result in score_result.items():
-    #         score = result.get('score', 0)
-    #         comment = result.get('comment', '')
-    #         passed = score >= 50  # Assuming the passing score threshold is 50
-    #         service = Services.objects.get(name__iexact=position)
-    #         screening_result = ScreeningResult.objects.create(
-    #             resume=resume,
-    #             score=score,
-    #             passed=passed,
-    #             comments=comment,
-    #             position=service
-    #         )
-    #         screening_results.append(screening_result)
-
-    #     # If any position passes, create a freelancer
-    #     freelancer = None
-    #     if any(result['score'] >= 50 for result in score_result.values()):
-    #         freelancer = create_freelancer_from_resume(resume, applied_positions)
-
-    #     # Prepare response data
-    #     screening_result_serializer = ScreeningResultSerializer(screening_results, many=True)
-    #     response_data = {
-    #         "message": "Email verified and screening completed.",
-    #         "screening_results": screening_result_serializer.data,
-    #     }
-    #     if freelancer:
-    #         response_data["freelancer_created"] = True
-        # if (freelancer):
-        #         # available_interviewers = get_available_interviewers("soft_skills")
-        #         # print("avaliable interviewers found",available_interviewers)
-
-        #         # if available_interviewers:
-        #         #     print("trying to get avaliable appointment dates...")
-        #         #     # Generate appointment date options for available interviewers
-        #         #     appointment_date_options = generate_appointment_date_options(available_interviewers)
-        #         #     print("avaliable appointment dates found",appointment_date_options)
-
-        #         #     # Create an appointment with date options
-        #         #     appointment = models.Appointment.objects.create(
-        #         #         freelancer=freelancer,
-        #         #         interview_type="soft_skills_assessment",
-        #         #         appointment_date_options=json.dumps(appointment_date_options, cls=DjangoJSONEncoder)
-        #         #     )
-        #         #     appointment.save()
-        #             # Create a notification for the freelancer about the appointment
-        #             # notification = models.Notification.objects.create(
-        #             # user=freelancer,
-        #             # type='appointment_date_choice',
-        #             # title=f"Interview Appointment for Soft Skills Assessment",
-        #             # description=f"Congratulations, You've passed the resume assessment and passed to the first round Soft Skills Assessment !",
-        #             # data={
-        #             #     "appointment_id": str(appointment.id),  # Include appointment ID as a string
-        #             #     "appointment_date_options": appointment.appointment_date_options  # Include the date options
-        #             # }
-        #             # Create a notification for the freelancer about the assessment result
-        #             notification = models.Notification.objects.create(
-        #             user=freelancer,
-        #             type='alert',
-        #             title=f"Soft Skills Assessment Passes",
-        #             description=f"Congratulations, You've passed the resume assessment and passed to the first round Soft Skills Assessment !",
-        #             )
-
-        return Response(response_data, status=status.HTTP_200_OK)
-
-# @action(detail=True, methods=['post'])
-# def verify_email(self, request, pk=None):
-#     resume = self.get_object()  # Get the resume by primary key (UUID)
-#     token = request.data.get('token')  # Get the token from the request
-
-#     if not token or resume.verification_token != token:
-#         return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
-
-#     # Mark the email as verified
-#     resume.is_email_verified = True
-#     resume.save()
-
-#     # Continue with the screening process (your existing logic here)
-#     resume_text = extract_text_from_pdf(resume.resume_file.path)
-#     applied_positions = resume.applied_positions.all()
-#     positions_applied_for = [position.name for position in applied_positions]
-
-#     score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
-
-#     screening_results = []
-#     for position, result in score_result.items():
-#         score = result.get('score', 0)
-#         comment = result.get('comment', '')
-#         passed = score >= 50
-#         service = Services.objects.get(name__iexact=position)
-#         screening_result = ScreeningResult.objects.create(
-#             resume=resume,
-#             score=score,
-#             passed=passed,
-#             comments=comment,
-#             position=service
-#         )
-#         screening_results.append(screening_result)
-
-#     freelancer = None
-#     if any(result['score'] >= 50 for result in score_result.values()):
-#         freelancer = create_freelancer_from_resume(resume, applied_positions)
-
-#     screening_result_serializer = ScreeningResultSerializer(screening_results, many=True)
-#     response_data = {
-#         "message": "Email verified and screening completed.",
-#         "screening_results": screening_result_serializer.data,
-#     }
-#     if freelancer:
-#         response_data["freelancer_created"] = True
-
-#     return Response(response_data, status=status.HTTP_200_OK)
-
-
-from django.utils import timezone
-from rest_framework.response import Response
-from rest_framework import status
-from django.db.models import Count, Q, F
-
 def send_resume_for_screening(resume):
     resume_text = extract_text_from_pdf(resume.resume_file.path)
-    applied_positions = resume.applied_positions.all()
-    positions_applied_for = [position.name for position in applied_positions]
-
-    score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
+    applied_position = resume.applied_position
+    score_result = score_resume_with_gemini(resume_text, applied_position.name)
 
     screening_results = []
     passed_any = False
 
+    if not score_result or 'error' in score_result:
+        print(f"Gemini scoring failed for {resume.email}: {score_result}")
+        return screening_results
+
     for position, result in score_result.items():
+        if not isinstance(result, dict):
+            continue
+
         score = result.get('score', 0)
         comment = result.get('comment', '')
         passed = score >= 50
+
         if passed:
             passed_any = True
-        service = Services.objects.get(name__iexact=position)
-        
+        else:
+            if score < 20:
+                hold_days = 120
+            elif score < 40:
+                hold_days = 60
+            else:
+                hold_days = 30
+
+            hold_until = timezone.now() + timedelta(days=hold_days)
+            models.ApplicationOnHold.objects.create(
+                resume=resume,
+                email=resume.email,
+                position=applied_position,
+                hold_until=hold_until,
+                reason=f"Resume screening failed. Score: {score}. Comments: {comment}",
+            )
+            print(f"Resume for {resume.email} is on hold until {hold_until} due to low score of {score}.")
+
         screening_result = ScreeningResult.objects.create(
             resume=resume,
             score=score,
             passed=passed,
             comments=comment,
-            position=service
+            position=applied_position,
         )
         screening_results.append(screening_result)
 
     if passed_any:
-        # Find an available ResumeChecker
+        current_time = timezone.now().time()
         today = timezone.now().date()
-        available_checker = models.ResumeChecker.objects.filter(
-            resume_checks__done=False
-        ).annotate(
-            checks_today=Count('resume_checks', filter=Q(resume_checks__created_at__date=today))
-        ).filter(checks_today__lt=F('max_resume_check_per_day')).first()
+
+        checker_qs = models.ResumeChecker.objects.annotate(
+            checks_today=Count(
+                'resume_checks',
+                filter=Q(resume_checks__created_at__date=today)
+            ),
+            checks_this_week=Count(
+                'resume_checks',
+                filter=Q(resume_checks__created_at__gte=timezone.now() - timedelta(days=7))
+            ),
+        ).filter(
+            checks_today__lt=F('max_resume_check_per_day'),
+            checks_this_week__lt=F('resume_check_per_week'),
+        )
+
+        available_checker = (
+            checker_qs.filter(
+                working_hours_start__lte=current_time,
+                working_hours_end__gte=current_time,
+            ).first()
+            or checker_qs.first()
+        )
 
         if available_checker:
-            # Assign the Resume to the ResumeChecker
             models.ResumeCheck.objects.create(
                 resumechecker=available_checker,
                 resume=resume,
-                done=False  # Screening not completed yet
             )
 
-
-
-from uuid import UUID
+    return screening_results
 
 
 @api_view(['POST'])
 def verify_email(request):
-    print("Trying to find resume...")
+    print("Trying to find resumes...")
 
     token = request.data.get('token')
     pk = request.data.get('pk')
@@ -264,79 +183,47 @@ def verify_email(request):
     except (ValueError, TypeError):
         raise ValidationError("Invalid or malformed UUID.")
 
-    resume = get_object_or_404(Resume, pk=resume_id)
+    # Retrieve the main resume object
+    main_resume = get_object_or_404(Resume, pk=resume_id)
 
-    if resume.verification_token != token:
+    if main_resume.verification_token != token:
         return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
 
-    resume.is_email_verified = True
-    resume.verification_token = ""
-    resume.save()
-
-    # Continue with the screening process (your existing logic here)
-    resume_text = extract_text_from_pdf(resume.resume_file.path)
-    applied_positions = resume.applied_positions.all()
-    positions_applied_for = [position.name for position in applied_positions]
-
-    score_result = score_resume_with_chatgpt(resume_text, positions_applied_for)
+    # Find all resumes with the same email
+    all_resumes = Resume.objects.filter(email=main_resume.email, is_email_verified=False)
 
     screening_results = []
-    resume_check_assigned = False  # Track if we assigned a ResumeChecker
-
-    for position, result in score_result.items():
-        score = result.get('score', 0)
-        comment = result.get('comment', '')
-        passed = score >= 50
-        service = Services.objects.get(name__iexact=position)
-        screening_result = ScreeningResult.objects.create(
-            resume=resume,
-            score=score,
-            passed=passed,
-            comments=comment,
-            position=service
-        )
-        screening_results.append(screening_result)
-
-        # Assign a ResumeCheck if passed (only once)
-        if passed and not resume_check_assigned:
-            resume_checker = models.ResumeChecker.objects.annotate(
-                check_count=Count('resume_checks', filter=Q(resume_checks__done=False))
-            ).order_by('check_count').first()
-
-            if resume_checker:
-                models.ResumeCheck.objects.create(resumechecker=resume_checker, resume=resume, passed=False)
-                resume_check_assigned = True
-
+    for resume in all_resumes:
+        resume.is_email_verified = True
+        resume.verification_token = ""
+        resume.save()
+        send_resume_for_screening(resume)
     screening_result_serializer = serializers.ScreeningResultSerializer(screening_results, many=True)
-    
+
     response_data = {
-        "message": "Email verified and watch out your email for your application result.",
+        "message": "Email verified. Watch out for your application results.",
         "screening_results": screening_result_serializer.data,
     }
 
     return Response(response_data, status=status.HTTP_200_OK)
 
-def send_email(to_email, subject, html_content):
-    print("to email is ",to_email)
-    print("subject is ",subject)
-    print("html_content is ",html_content)
-    message = Mail(
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to_emails=to_email,
+
+
+
+def send_email(recipient_email, subject, html_content):
+    text_content = "Please view this email in an HTML-compatible email client."
+
+    email_message = EmailMultiAlternatives(
         subject=subject,
-        html_content=html_content
+        body=text_content,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[recipient_email],
     )
-    print("from email is",settings.DEFAULT_FROM_EMAIL)
-    print("api key is ",settings.EMAIL_HOST_USER)
-    print("message is ",message)
-    try:
-        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
-        response = sg.send(message)
-        print("email sent")
-        return response.status_code
-    except Exception as e:
-        print("error sending email ",str(e))
-        return str(e)
+
+    email_message.attach_alternative(html_content, "text/html")
+    email_message.send(fail_silently=False)
+
+    return True
 
 # def send_verification_email(resume):
 #     print("resume email is ",resume.email)
@@ -363,23 +250,36 @@ def send_email(to_email, subject, html_content):
 def send_verification_email(resume):
     token = resume.verification_token
     uid = urlsafe_base64_encode(str(resume.id).encode())
-    verification_url = "resumes/{}/verify-email/{}/".format(uid, token)
+
+    verification_url = f"resumes/{uid}/verify-email/{token}/"
     full_url = f"{settings.FRONTEND_URL}{verification_url}"
-    # Subject for the email
+
     subject = "Verify your email address"
-    
-    # HTML content for the email
+
+    text_content = f"""
+Hello,
+
+Click the link below to verify your email address:
+
+{full_url}
+"""
+
     html_content = f"""
     <html>
         <body>
             <p>Click the link below to verify your email address:</p>
-            <a href="{full_url}">{full_url}</a>
+            <p>
+                <a href="{full_url}">Verify Email</a>
+            </p>
         </body>
     </html>
     """
-    
-    # Call send_email function with the recipient email, subject, and HTML content
-    return send_email(resume.email, subject, html_content)
+
+    return send_email(
+        recipient_email=resume.email,
+        subject=subject,
+        html_content=html_content
+    )
 
 # @api_view(['GET'])
 # def verify_email(request, uidb64, token):
@@ -448,7 +348,7 @@ def activate_full_assessment(request, resume_id):
         selected_technologies = request.data.get('selectedTechnologies', {})
         resume = models.Resume.objects.get(id=resume_id)
         resume_check = models.ResumeCheck.objects.get(resume=resume)
-        freelancer = create_freelancer_from_resume(resume,resume.applied_positions.all())
+        freelancer = create_freelancer_from_resume(resume)
         # Iterate over each applied position's ID and its corresponding assessment statuses
         for position_id, status_data in modal_data.items():
             try:
@@ -479,9 +379,13 @@ def activate_full_assessment(request, resume_id):
                 html_content = f"""
                 <html>
                 <body>
-                <p>Congratualations , you have passed to the first round which is full assessment.</p>
-                <p>You can start taking the assessments by login using account credentials used during applying.</p>
-                </body>
+                 <p class="header">Congratulations, {user.first_name}!</p>
+                <p>We are pleased to inform you that you have successfully advanced to the next stage of our selection process: the Full Assessment.</p>
+                <p>You can now proceed with the assessments by logging in using the credentials you provided during your application.</p>
+                <p>If you have any questions, feel free to reach out to us.</p>
+                <p>Best regards,</p>
+                <p><strong>The Recruitment Team</strong></p>
+                <a href="https://yourwebsite.com/login" class="button">Start Assessment</a>
                 </html>
                 """
                 send_email(user.email,"Congratualtions you have passed to the first round!",html_content)

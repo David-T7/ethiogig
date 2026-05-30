@@ -20,7 +20,7 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyDE2DbBRs5KBgp4KhFDj4-FopTY6Wt2jxk
+      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
     depends_on:
       - db
       - redis
@@ -55,7 +55,7 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyDE2DbBRs5KBgp4KhFDj4-FopTY6Wt2jxk
+      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
     depends_on:
       - db
       - redis
@@ -74,7 +74,7 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyBslEjICNMrU9on1KRhq6kjEFkguvTEB7s
+      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
     depends_on:
       - db
       - redis

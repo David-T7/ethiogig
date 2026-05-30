@@ -40,8 +40,7 @@ from django.utils.crypto import get_random_string
 from rest_framework.decorators import action
 from core import models
 from django.conf import settings
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from django.core.mail import EmailMultiAlternatives
 from django.contrib.auth import get_user_model
 from django.http import JsonResponse
 import json
@@ -235,66 +234,72 @@ def send_email_verification_link(request):
 
 
 def send_email(to_email, subject, html_content):
-    print("to email is ",to_email)
-    print("subject is ",subject)
-    print("html_content is ",html_content)
-    message = Mail(
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to_emails=to_email,
+    text_content = "Please view this email in an HTML-compatible email client."
+    email_message = EmailMultiAlternatives(
         subject=subject,
-        html_content=html_content
+        body=text_content,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[to_email],
     )
-    print("from email is",settings.DEFAULT_FROM_EMAIL)
-    print("api key is ",settings.EMAIL_HOST_USER)
-    print("message is ",message)
+    email_message.attach_alternative(html_content, "text/html")
     try:
-        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
-        response = sg.send(message)
+        email_message.send(fail_silently=False)
         print("email sent")
-        return response.status_code
+        return 200
     except Exception as e:
-        print("error sending email ",str(e))
+        print("error sending email", str(e))
         return str(e)
 
 
+from django.http import JsonResponse
+
 @api_view(['POST'])
 def send_email_(request):
-    
     name = request.data.get('name')
     email = request.data.get('email')
     message = request.data.get('message')
     to_email = request.data.get('to_email')
     subject = request.data.get('subject')
-    if not name or not email or not message:
+
+    if not name or not email or not message or not to_email or not subject:
         return JsonResponse({'error': 'All fields are required'}, status=400)
 
     try:
-        html_content = f"""
-        <html>
-            <body>
-                <p>Click the link below to verify your email address:</p>
-                <a href="{message}</a>
-            </body>
-        </html>
-        """
+        text_content = f"""
+Hello,
 
-        message = Mail(
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to_emails=to_email,
-        subject=subject,
-        html_content=html_content
+Click the link below to verify your email address:
+
+{message}
+"""
+
+        html_content = f"""
+<html>
+    <body>
+        <p>Click the link below to verify your email address:</p>
+        <p>
+            <a href="{message}">Verify Email</a>
+        </p>
+    </body>
+</html>
+"""
+
+        email_message = EmailMultiAlternatives(
+            subject=subject,
+            body=text_content,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[to_email]
         )
-        print("from email is",settings.DEFAULT_FROM_EMAIL)
-        print("api key is ",settings.EMAIL_HOST_USER)
-        print("message is ",message)
-        sg = SendGridAPIClient(settings.EMAIL_HOST_USER)
-        response = sg.send(message)
-        print("email sent")
-        return Response(status=status.HTTP_200_OK)
+
+        email_message.attach_alternative(html_content, "text/html")
+        email_message.send(fail_silently=False)
+
+        print("Email sent successfully")
+        return Response({'message': 'Email sent successfully'}, status=status.HTTP_200_OK)
 
     except Exception as e:
-        print(e)
-        return Response({'error': 'Failed to send email'}, status=500)
+        print("Email sending failed:", e)
+        return Response({'error': 'Failed to send email'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
