@@ -213,3 +213,9 @@ EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL")
 FRONTEND_URL = "http://localhost:3000/"
+
+# Microservice URLs — override via env vars in docker-compose.yml
+THEORETICAL_TEST_SERVICE_URL = os.environ.get('THEORETICAL_TEST_SERVICE_URL', 'http://localhost:8001')
+PRACTICAL_TEST_SERVICE_URL = os.environ.get('PRACTICAL_TEST_SERVICE_URL', 'http://localhost:8002')
+SURVEILLANCE_SERVICE_URL = os.environ.get('SURVEILLANCE_SERVICE_URL', 'http://localhost:8003')
+KYC_SERVICE_URL = os.environ.get('KYC_SERVICE_URL', 'http://localhost:8005')

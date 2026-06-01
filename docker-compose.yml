@@ -21,6 +21,10 @@ services:
       - DB_USER=devuser
       - DB_PASS=changeme
       - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
+      - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
+      - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
+      - SURVEILLANCE_SERVICE_URL=http://localhost:8003
+      - KYC_SERVICE_URL=http://localhost:8005
     depends_on:
       - db
       - redis
@@ -56,6 +60,10 @@ services:
       - DB_USER=devuser
       - DB_PASS=changeme
       - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
+      - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
+      - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
+      - SURVEILLANCE_SERVICE_URL=http://localhost:8003
+      - KYC_SERVICE_URL=http://localhost:8005
     depends_on:
       - db
       - redis
@@ -75,6 +83,10 @@ services:
       - DB_USER=devuser
       - DB_PASS=changeme
       - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
+      - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
+      - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
+      - SURVEILLANCE_SERVICE_URL=http://localhost:8003
+      - KYC_SERVICE_URL=http://localhost:8005
     depends_on:
       - db
       - redis

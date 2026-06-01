@@ -98,7 +98,9 @@ class FullAssessment(models.Model):
     status = models.CharField(choices=assessment_status , default='not_started')
     passed = models.BooleanField(default=False)
     on_hold = models.BooleanField(default=False)
-    hold_until = models.DateTimeField(null=True, blank=True)  # Date field for hold period
+    hold_until = models.DateTimeField(null=True, blank=True)
+    theoretical_test_score = models.FloatField(null=True, blank=True)
+    practical_test_score = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     new_freelancer = models.BooleanField(default=True)
@@ -699,4 +701,38 @@ class Waitlist(models.Model):
     email = models.EmailField(unique=True)
     field = models.ForeignKey(Field, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class VettingPipelineRecord(models.Model):
+    STAGE_CHOICES = [
+        ('ai_screening', 'AI Screening'),
+        ('kyc', 'KYC Verification'),
+        ('theoretical_test', 'Theoretical Skills Test'),
+        ('practical_test', 'Practical Skills Test'),
+        ('resume_check', 'Resume Check'),
+        ('full_assessment', 'Full Assessment'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('invited', 'Invited'),
+        ('in_progress', 'In Progress'),
+        ('passed', 'Passed'),
+        ('failed', 'Failed'),
+        ('on_hold', 'On Hold'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.ForeignKey('Resume', on_delete=models.CASCADE, related_name='pipeline_records')
+    stage = models.CharField(max_length=30, choices=STAGE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    score = models.FloatField(null=True, blank=True)
+    external_submission_id = models.UUIDField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['resume', 'stage']]
+
+    def __str__(self):
+        return f"{self.resume.email} — {self.stage} ({self.status})"
 

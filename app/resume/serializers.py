@@ -32,9 +32,11 @@ class FullAssessmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FullAssessment
         fields = [
-            'id', 'freelancer', 'finished', 'soft_skills_assessment_status','status','depth_skill_assessment_status', 
-            'applied_position', 'live_assessment_status', 'project_assessment_status', 'passed', 
-            'on_hold', 'hold_until', 'created_at', 'updated_at', 'new_freelancer'
+            'id', 'freelancer', 'finished', 'soft_skills_assessment_status', 'status',
+            'depth_skill_assessment_status', 'applied_position', 'live_assessment_status',
+            'project_assessment_status', 'passed', 'on_hold', 'hold_until',
+            'theoretical_test_score', 'practical_test_score',
+            'created_at', 'updated_at', 'new_freelancer',
         ]
         read_only_fields = ['id']
 
@@ -49,5 +51,15 @@ class ApplicationOnHoldSerializer(serializers.ModelSerializer):
         model = models.ApplicationOnHold
         fields = ['id', 'resume', 'email', 'position', 'hold_until', 'created_at','reason']
         read_only_fields = ['id', 'created_at']
+
+
+class VettingPipelineRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.VettingPipelineRecord
+        fields = [
+            'id', 'resume', 'stage', 'status', 'score',
+            'external_submission_id', 'notes', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 

@@ -137,10 +137,23 @@ def create_freelancer_from_resume(resume):
         freelancer.password = resume.password
         freelancer.save()
 
-    models.FullAssessment.objects.get_or_create(
+    assessment, _ = models.FullAssessment.objects.get_or_create(
         freelancer=freelancer,
         applied_position=resume.applied_position,
     )
+
+    theoretical = models.VettingPipelineRecord.objects.filter(
+        resume=resume, stage='theoretical_test'
+    ).first()
+    practical = models.VettingPipelineRecord.objects.filter(
+        resume=resume, stage='practical_test'
+    ).first()
+
+    if theoretical and theoretical.score is not None:
+        assessment.theoretical_test_score = theoretical.score
+    if practical and practical.score is not None:
+        assessment.practical_test_score = practical.score
+    assessment.save()
 
     print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.full_name}")
     return freelancer

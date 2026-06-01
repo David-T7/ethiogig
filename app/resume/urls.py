@@ -21,4 +21,8 @@ urlpatterns = [
     path('approve_freelancer/<uuid:resume_id>/', views.approve_freelancer, name='approve_freelancer'),
     path('verify-email/', views.verify_email, name='verify-email'),
     path("assessment-termination/", views.AssessmentTerminationView.as_view(), name="assessment-termination"),
+    # Pipeline endpoints
+    path('resumes/<uuid:resume_id>/candidate-token/', views.get_candidate_token, name='candidate-token'),
+    path('resumes/<uuid:resume_id>/pipeline-stage/', views.report_stage_result, name='report-stage-result'),
+    path('resumes/<uuid:resume_id>/pipeline-status/', views.get_pipeline_status, name='pipeline-status'),
 ]

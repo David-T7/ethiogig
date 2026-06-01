@@ -1,41 +1,34 @@
 import uuid
-from django.shortcuts import get_object_or_404
-from rest_framework import viewsets, status
-from rest_framework.response import Response
-from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_result_email, create_freelancer_from_resume
-from core.models import Resume, ScreeningResult, ScreeningConfig , Field , Services , AssessmentTermination , FullAssessment
-from . import serializers
-from rest_framework.permissions import AllowAny
-from rest_framework.exceptions import ValidationError
-from django.utils import timezone
+import jwt
 from datetime import timedelta, datetime
 import json
-from django.core.serializers.json import DjangoJSONEncoder
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
-from rest_framework.permissions import BasePermission
-from rest_framework.decorators import api_view
-from django.core.mail import send_mail
+
+from django.shortcuts import get_object_or_404
 from django.conf import settings
-from django.urls import reverse
-from django.utils.http import urlsafe_base64_encode , urlsafe_base64_decode
-from django.utils.encoding import force_bytes
-from django.contrib.auth.tokens import default_token_generator
-from django.utils.crypto import get_random_string
-from rest_framework.decorators import action
-from core import models
-from django.conf import settings
-from django.db.models import Count, Q, F
-from rest_framework.generics import RetrieveUpdateAPIView
-from django.utils.timezone import now
-from rest_framework.exceptions import PermissionDenied
-from django.contrib.auth.hashers import make_password
-from uuid import UUID
 from django.utils import timezone
-from rest_framework.response import Response
-from rest_framework import status
+from django.utils.timezone import now
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.crypto import get_random_string
+from django.db.models import Count, Q, F
 from django.core.mail import EmailMultiAlternatives
+from django.contrib.auth.hashers import make_password
+from django.core.serializers.json import DjangoJSONEncoder
+
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.views import APIView
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.generics import RetrieveUpdateAPIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+from core import models
+from core.models import Resume, ScreeningResult, ScreeningConfig, Field, Services, AssessmentTermination, FullAssessment
+from . import serializers
+from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_result_email, create_freelancer_from_resume
+
+from uuid import UUID
 
 class ResumeViewSet(viewsets.ModelViewSet):
     queryset = Resume.objects.all()
@@ -85,6 +78,28 @@ class ResumeViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+AI_SCREENING_PASS_THRESHOLD = 60
+
+PIPELINE_STAGES = [
+    'ai_screening',
+    'kyc',
+    'theoretical_test',
+    'practical_test',
+    'resume_check',
+    'full_assessment',
+]
+
+
+def generate_candidate_token(resume):
+    payload = {
+        'user_id': str(resume.id),
+        'email': resume.email,
+        'role': 'candidate',
+        'exp': datetime.utcnow() + timedelta(days=7),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+
 def send_resume_for_screening(resume):
     resume_text = extract_text_from_pdf(resume.resume_file.path)
     applied_position = resume.applied_position
@@ -103,70 +118,336 @@ def send_resume_for_screening(resume):
 
         score = result.get('score', 0)
         comment = result.get('comment', '')
-        passed = score >= 50
+        passed = score >= AI_SCREENING_PASS_THRESHOLD
 
         if passed:
             passed_any = True
         else:
-            if score < 20:
-                hold_days = 120
-            elif score < 40:
-                hold_days = 60
-            else:
-                hold_days = 30
-
+            hold_days = 120 if score < 20 else 60 if score < 40 else 30
             hold_until = timezone.now() + timedelta(days=hold_days)
             models.ApplicationOnHold.objects.create(
                 resume=resume,
                 email=resume.email,
                 position=applied_position,
                 hold_until=hold_until,
-                reason=f"Resume screening failed. Score: {score}. Comments: {comment}",
+                reason=f"AI resume screening failed. Score: {score}. Comments: {comment}",
             )
-            print(f"Resume for {resume.email} is on hold until {hold_until} due to low score of {score}.")
 
-        screening_result = ScreeningResult.objects.create(
+        ScreeningResult.objects.create(
             resume=resume,
             score=score,
             passed=passed,
             comments=comment,
             position=applied_position,
         )
-        screening_results.append(screening_result)
+        screening_results.append(score)
 
     if passed_any:
-        current_time = timezone.now().time()
-        today = timezone.now().date()
-
-        checker_qs = models.ResumeChecker.objects.annotate(
-            checks_today=Count(
-                'resume_checks',
-                filter=Q(resume_checks__created_at__date=today)
-            ),
-            checks_this_week=Count(
-                'resume_checks',
-                filter=Q(resume_checks__created_at__gte=timezone.now() - timedelta(days=7))
-            ),
-        ).filter(
-            checks_today__lt=F('max_resume_check_per_day'),
-            checks_this_week__lt=F('resume_check_per_week'),
+        models.VettingPipelineRecord.objects.update_or_create(
+            resume=resume,
+            stage='ai_screening',
+            defaults={'status': 'passed', 'score': max(screening_results)},
         )
-
-        available_checker = (
-            checker_qs.filter(
-                working_hours_start__lte=current_time,
-                working_hours_end__gte=current_time,
-            ).first()
-            or checker_qs.first()
-        )
-
-        if available_checker:
-            models.ResumeCheck.objects.create(
-                resumechecker=available_checker,
-                resume=resume,
-            )
+        trigger_kyc_stage(resume)
 
     return screening_results
+
+
+def trigger_kyc_stage(resume):
+    models.VettingPipelineRecord.objects.update_or_create(
+        resume=resume,
+        stage='kyc',
+        defaults={'status': 'invited'},
+    )
+    token = generate_candidate_token(resume)
+    kyc_url = (
+        f"{settings.FRONTEND_URL}verify-account"
+        f"?token={token}&candidate_id={resume.id}"
+    )
+    html_content = f"""
+    <html><body>
+    <p>Congratulations! Your resume passed our AI screening for <strong>{resume.applied_position.name}</strong>.</p>
+    <p>The next step is identity verification. Please complete KYC before the skills tests.</p>
+    <p><a href="{kyc_url}">Complete Identity Verification</a></p>
+    <p>This link expires in 7 days. Do not share it.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Next Step: Identity Verification", html_content)
+
+
+def trigger_theoretical_test(resume):
+    models.VettingPipelineRecord.objects.update_or_create(
+        resume=resume,
+        stage='theoretical_test',
+        defaults={'status': 'invited'},
+    )
+    token = generate_candidate_token(resume)
+    from urllib.parse import quote
+    test_url = (
+        f"{settings.FRONTEND_URL}skills-test/theoretical"
+        f"?token={token}&candidate_id={resume.id}"
+        f"&position={quote(resume.applied_position.name)}"
+    )
+    html_content = f"""
+    <html><body>
+    <p>Your identity has been verified. The next step is the theoretical skills assessment.</p>
+    <p>Position: <strong>{resume.applied_position.name}</strong></p>
+    <p>This is a timed test. Ensure you are in a quiet environment with camera access before starting.</p>
+    <p><a href="{test_url}">Start Theoretical Skills Test</a></p>
+    <p>This link expires in 7 days.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Next Step: Theoretical Skills Test", html_content)
+
+
+def trigger_practical_test(resume):
+    models.VettingPipelineRecord.objects.update_or_create(
+        resume=resume,
+        stage='practical_test',
+        defaults={'status': 'invited'},
+    )
+    token = generate_candidate_token(resume)
+    from urllib.parse import quote
+    test_url = (
+        f"{settings.FRONTEND_URL}skills-test/practical"
+        f"?token={token}&candidate_id={resume.id}"
+        f"&position={quote(resume.applied_position.name)}"
+    )
+    html_content = f"""
+    <html><body>
+    <p>You passed the theoretical skills test. The next step is the practical coding assessment.</p>
+    <p>Position: <strong>{resume.applied_position.name}</strong></p>
+    <p>This is a hands-on coding challenge. Camera proctoring is active during the test.</p>
+    <p><a href="{test_url}">Start Practical Skills Test</a></p>
+    <p>This link expires in 7 days.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Next Step: Practical Skills Test", html_content)
+
+
+def trigger_resume_check_stage(resume):
+    models.VettingPipelineRecord.objects.update_or_create(
+        resume=resume,
+        stage='resume_check',
+        defaults={'status': 'pending'},
+    )
+    current_time = timezone.now().time()
+    today = timezone.now().date()
+
+    checker_qs = models.ResumeChecker.objects.annotate(
+        checks_today=Count(
+            'resume_checks',
+            filter=Q(resume_checks__created_at__date=today),
+        ),
+        checks_this_week=Count(
+            'resume_checks',
+            filter=Q(resume_checks__created_at__gte=timezone.now() - timedelta(days=7)),
+        ),
+    ).filter(
+        checks_today__lt=F('max_resume_check_per_day'),
+        checks_this_week__lt=F('resume_check_per_week'),
+    )
+
+    available_checker = (
+        checker_qs.filter(
+            working_hours_start__lte=current_time,
+            working_hours_end__gte=current_time,
+        ).first()
+        or checker_qs.first()
+    )
+
+    if available_checker:
+        models.ResumeCheck.objects.get_or_create(
+            resumechecker=available_checker,
+            resume=resume,
+        )
+
+    html_content = f"""
+    <html><body>
+    <p>You have passed the automated skills assessments for <strong>{resume.applied_position.name}</strong>.</p>
+    <p>Your application is now being reviewed by our team. We will contact you with the next steps shortly.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Application Under Review", html_content)
+
+
+def advance_pipeline(resume, completed_stage):
+    try:
+        idx = PIPELINE_STAGES.index(completed_stage)
+    except ValueError:
+        return
+
+    if idx + 1 >= len(PIPELINE_STAGES):
+        return
+
+    next_stage = PIPELINE_STAGES[idx + 1]
+    if next_stage == 'kyc':
+        trigger_kyc_stage(resume)
+    elif next_stage == 'theoretical_test':
+        trigger_theoretical_test(resume)
+    elif next_stage == 'practical_test':
+        trigger_practical_test(resume)
+    elif next_stage == 'resume_check':
+        trigger_resume_check_stage(resume)
+
+
+def _hold_days_for_score(score):
+    if score is None:
+        return 30
+    if score < 20:
+        return 120
+    if score < 40:
+        return 60
+    return 30
+
+
+def handle_stage_failure(resume, stage, score):
+    hold_days = _hold_days_for_score(score)
+    hold_until = timezone.now() + timedelta(days=hold_days)
+    models.ApplicationOnHold.objects.create(
+        resume=resume,
+        email=resume.email,
+        position=resume.applied_position,
+        hold_until=hold_until,
+        reason=f"Did not meet the threshold for stage '{stage}'. Score: {score}.",
+    )
+    html_content = f"""
+    <html><body>
+    <p>Thank you for completing the {stage.replace('_', ' ')} stage.</p>
+    <p>Unfortunately you did not meet the required threshold at this time.</p>
+    <p>You may reapply after <strong>{hold_until.strftime('%B %d, %Y')}</strong>.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Application Update", html_content)
+
+
+def _authenticate_candidate(request, resume_id):
+    """
+    Validates the candidate Bearer token and confirms it belongs to resume_id.
+    Returns (payload, None) on success or (None, error_response) on failure.
+    """
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None, Response(
+            {'error': 'Authentication required. Provide a Bearer token.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    token = auth.split(' ', 1)[1]
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        return None, Response({'error': 'Token has expired.'}, status=status.HTTP_401_UNAUTHORIZED)
+    except jwt.InvalidTokenError:
+        return None, Response({'error': 'Invalid token.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if payload.get('role') != 'candidate':
+        return None, Response({'error': 'Not a candidate token.'}, status=status.HTTP_403_FORBIDDEN)
+    if str(payload.get('user_id')) != str(resume_id):
+        return None, Response({'error': 'Token does not match this resume.'}, status=status.HTTP_403_FORBIDDEN)
+
+    return payload, None
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def get_candidate_token(request, resume_id):
+    """
+    Issues a 7-day JWT for microservice access.
+    Requires the candidate's password in the request body.
+    """
+    try:
+        resume = models.Resume.objects.get(id=resume_id, is_email_verified=True)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found or email not verified.'}, status=status.HTTP_404_NOT_FOUND)
+
+    password = request.data.get('password')
+    if not password:
+        return Response({'error': "'password' is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not resume.check_password(password):
+        return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    token = generate_candidate_token(resume)
+    return Response({
+        'token': token,
+        'candidate_id': str(resume.id),
+        'expires_in': 7 * 24 * 3600,
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def report_stage_result(request, resume_id):
+    """
+    Records the result of a pipeline stage and advances the pipeline.
+    Body: { stage, passed, score (optional), submission_id (optional), notes (optional) }
+    Requires the candidate Bearer token issued by get_candidate_token.
+    """
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    stage = request.data.get('stage')
+    passed = request.data.get('passed')
+    score = request.data.get('score')
+    submission_id = request.data.get('submission_id')
+    notes = request.data.get('notes', '')
+
+    if stage not in PIPELINE_STAGES:
+        return Response({'error': f"Unknown stage '{stage}'."}, status=status.HTTP_400_BAD_REQUEST)
+    if passed is None:
+        return Response({'error': "'passed' is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    record, _ = models.VettingPipelineRecord.objects.get_or_create(
+        resume=resume,
+        stage=stage,
+    )
+    record.status = 'passed' if passed else 'failed'
+    record.score = score
+    record.notes = notes
+    if submission_id:
+        try:
+            record.external_submission_id = uuid.UUID(str(submission_id))
+        except (ValueError, AttributeError):
+            pass
+    record.save()
+
+    if passed:
+        advance_pipeline(resume, stage)
+    else:
+        handle_stage_failure(resume, stage, score)
+
+    next_stage = PIPELINE_STAGES[PIPELINE_STAGES.index(stage) + 1] if PIPELINE_STAGES.index(stage) + 1 < len(PIPELINE_STAGES) else None
+    return Response({
+        'recorded': stage,
+        'status': record.status,
+        'next_stage': next_stage if passed else None,
+    })
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def get_pipeline_status(request, resume_id):
+    """Returns the pipeline status for a resume. Requires the candidate Bearer token."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    records = models.VettingPipelineRecord.objects.filter(resume=resume).order_by('created_at')
+    serializer = serializers.VettingPipelineRecordSerializer(records, many=True)
+    return Response(serializer.data)
 
 
 @api_view(['POST'])
