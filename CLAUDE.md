@@ -62,6 +62,11 @@ Set in `.env` (app directory) and referenced in `docker-compose.yml`:
 | `GEMINI_API_KEY` | Google Generative AI for resume screening |
 | `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | SMTP (Brevo) for transactional email |
 | `DEFAULT_FROM_EMAIL` | Sender address |
+| `FRONTEND_URL` | Base URL prepended to candidate invitation links in emails |
+| `THEORETICAL_TEST_SERVICE_URL` | ethiogig-testing microservice (default: `http://localhost:8001`) |
+| `PRACTICAL_TEST_SERVICE_URL` | ethio_gig_code_testing microservice (default: `http://localhost:8002`) |
+| `KYC_SERVICE_URL` | IDVerification microservice (default: `http://localhost:8003`) |
+| `SURVEILLANCE_SERVICE_URL` | Camera-Surveillance-System microservice (default: `http://localhost:8004`) |
 
 > **Note:** `GEMINI_API_KEY` is currently hardcoded in `docker-compose.yml` — move it to `.env` before any production deployment.
 
@@ -102,49 +107,63 @@ Authentication: JWT Bearer tokens (SimpleJWT) — 60-day access, 120-day refresh
 
 ## Freelancer Vetting Pipeline
 
-### Current pipeline
+Toptal-style strictness (top ~3% acceptance) — cheapest-first progressive elimination so human reviewers only see the strongest candidates.
 
 ```
 Resume Submitted
       ↓
-AI Screening (Gemini)  ←  ScreeningConfig defines criteria per position
+Stage 1 — AI Screening (Gemini)            ← threshold: 60; ScreeningResult stored
       ↓
-ResumeChecker Review   ←  Auto-assigned by capacity; result stored in ResumeCheck
+Stage 2 — KYC Verification                 ← IDVerification microservice; candidate invited by email
       ↓
-FullAssessment Created
-      ├── soft_skills  (Interviewer — soft skills type)
-      ├── depth        (Interviewer — technical type)
-      ├── live         (Interviewer — live interview type)
-      └── project      (Final project-based evaluation)
+Stage 3 — Theoretical Skills Test          ← ethiogig-testing microservice; camera proctored
       ↓
-Freelancer Approved / Rejected
-```
-
-### Planned pipeline (issue [#1](https://github.com/David-T7/ethiogig/issues/1))
-
-The goal is Toptal-style strictness (top ~3% acceptance) using cheapest-first progressive elimination so human reviewers only see the strongest candidates.
-
-```
-Resume Submitted
+Stage 4 — Practical Coding Test            ← ethio_gig_code_testing microservice; camera proctored
       ↓
-Stage 1 — AI Screening (Gemini)         ← threshold: 60 (currently 50)
+Stage 5 — ResumeChecker Review             ← auto-assigned by capacity (sees only strong candidates now)
       ↓
-Stage 2 — Automated Skills Test         ← timed, auto-graded; top 30% pass  [NOT BUILT]
-      ↓
-Stage 3 — Async Video Screening         ← Gemini scores transcript           [NOT BUILT]
-      ↓
-Stage 4 — ResumeChecker Review          ← small, high-quality pool by now
-      ↓
-Stage 5 — FullAssessment (soft/depth/live)
-      ↓
-Stage 6 — Test Project (4–6 hr task)    ← auto-evaluated with unit tests     [NOT BUILT]
+Stage 6 — FullAssessment (soft/depth/live) ← Interviewer-led; appointments scheduled
       ↓
 Freelancer Approved / Rejected
 ```
 
-**Models needed:** `SkillsTest`, `SkillsTestSubmission`, `VideoScreening`, `TestProject`  
-**Fields to add on `FullAssessment`:** `test_score`, `video_score`  
-**Priority:** Stage 2 (automated skills test) has the highest ROI — implement first.
+### Key models
+
+- **`VettingPipelineRecord`** (`core/models.py`, migration `0103`) — one row per resume per stage; tracks `stage`, `status` (invited/passed/failed), `score`, `notes`, `external_submission_id`
+- **`ApplicationOnHold`** — created on any stage failure; hold duration scales with score (< 20 → 120 days, < 40 → 60 days, else 30 days)
+
+### Key functions (`resume/views.py`)
+
+| Function | Purpose |
+|---|---|
+| `generate_candidate_token(resume)` | Issues 7-day JWT (HS256, `SECRET_KEY`); accepted by all microservices |
+| `send_resume_for_screening(resume)` | Stage 1 — Gemini scoring, creates `ScreeningResult`, triggers `trigger_kyc_stage` on pass |
+| `trigger_kyc_stage(resume)` | Stage 2 — updates pipeline record, emails candidate with KYC link |
+| `trigger_theoretical_test(resume)` | Stage 3 — updates pipeline record, emails candidate with test link |
+| `trigger_practical_test(resume)` | Stage 4 — updates pipeline record, emails candidate with coding test link |
+| `trigger_resume_check_stage(resume)` | Stage 5 — assigns available `ResumeChecker`, notifies candidate |
+| `advance_pipeline(resume, completed_stage)` | Chains to next stage after a pass |
+| `handle_stage_failure(resume, stage, score)` | Creates `ApplicationOnHold`, emails candidate with reapply date |
+
+### Pipeline API endpoints
+
+| Method | URL | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/api/resumes/{id}/candidate-token/` | Password in body | Issue 7-day candidate JWT |
+| `POST` | `/api/resumes/{id}/pipeline-stage/` | Candidate Bearer token | Report stage result; auto-advances pipeline |
+| `GET` | `/api/resumes/{id}/pipeline-status/` | Candidate Bearer token | Return all `VettingPipelineRecord` rows for a resume |
+
+### Microservice integration
+
+All microservices share the main backend's `SECRET_KEY` — candidate JWTs issued here work directly for microservice auth. The `candidate_id` passed to microservices is `resume.id` (UUID).
+
+Camera proctoring is **frontend-driven**: the frontend periodically sends snapshots to the Camera-Surveillance-System microservice. If it returns `action: pause`, the frontend pauses the test. The main backend is not involved per-snapshot.
+
+### Not yet built
+
+- Video screening stage (async recorded answers + Gemini transcript scoring)
+- Admin analytics dashboard (pass rates per stage)
+- Automated microservice webhook callbacks (currently frontend-driven via `report_stage_result`)
 
 ---
 
