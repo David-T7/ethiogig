@@ -108,7 +108,11 @@ admin.site.register(models.DrcForwardedDisputes)
 admin.site.register(models.DisputeManager, DisputeManagerAdmin)
 admin.site.register(models.DrcResolvedDisputes)
 admin.site.register(models.FullAssessment)
-admin.site.register(models.Field)
+class FieldAdmin(admin.ModelAdmin):
+    list_display = ['name', 'accepting_applications']
+    list_editable = ['accepting_applications']
+
+admin.site.register(models.Field, FieldAdmin)
 admin.site.register(models.ResumeChecker, ResumeCheckerAdmin)
 admin.site.register(models.Project)
 admin.site.register(models.Waitlist)

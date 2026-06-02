@@ -25,4 +25,5 @@ urlpatterns = [
     path('resumes/<uuid:resume_id>/candidate-token/', views.get_candidate_token, name='candidate-token'),
     path('resumes/<uuid:resume_id>/pipeline-stage/', views.report_stage_result, name='report-stage-result'),
     path('resumes/<uuid:resume_id>/pipeline-status/', views.get_pipeline_status, name='pipeline-status'),
+    path('resumes/<uuid:resume_id>/candidate-info/', views.get_candidate_info, name='candidate-info'),
 ]

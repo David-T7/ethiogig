@@ -70,11 +70,16 @@ class ResumeViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(data=resume_data)
             serializer.is_valid(raise_exception=True)
             resume = serializer.save()
-            send_resume_for_screening(resume)
             resumes.append(resume)
 
+        if resumes:
+            send_verification_email(resumes[0])
+
         return Response(
-            "Application was successful. Please wait for the evaluation to complete. We will contact you soon.",
+            {
+                "message": "Application was successful. Please verify your email to continue.",
+                "resume_ids": [str(r.id) for r in resumes],
+            },
             status=status.HTTP_201_CREATED,
         )
 
@@ -90,10 +95,48 @@ PIPELINE_STAGES = [
 ]
 
 
+def pipeline_past_stage(resume, stage):
+    """True if this stage or any later pipeline stage is already passed."""
+    try:
+        idx = PIPELINE_STAGES.index(stage)
+    except ValueError:
+        return False
+    return models.VettingPipelineRecord.objects.filter(
+        resume=resume,
+        stage__in=PIPELINE_STAGES[idx:],
+        status='passed',
+    ).exists()
+
+
+def _invite_pipeline_stage(resume, stage, initial_status='invited'):
+    """
+    Create or activate a pipeline stage without downgrading completed progress.
+    Returns True when the candidate should receive a new invitation for this stage.
+    """
+    if pipeline_past_stage(resume, stage):
+        return False
+
+    record = models.VettingPipelineRecord.objects.filter(resume=resume, stage=stage).first()
+    if record:
+        if record.status == 'pending':
+            record.status = initial_status
+            record.save(update_fields=['status', 'updated_at'])
+            return True
+        return False
+
+    models.VettingPipelineRecord.objects.create(
+        resume=resume,
+        stage=stage,
+        status=initial_status,
+    )
+    return True
+
+
 def generate_candidate_token(resume):
     payload = {
         'user_id': str(resume.id),
         'email': resume.email,
+        'full_name': resume.full_name,
         'role': 'candidate',
         'exp': datetime.utcnow() + timedelta(days=7),
     }
@@ -148,17 +191,15 @@ def send_resume_for_screening(resume):
             stage='ai_screening',
             defaults={'status': 'passed', 'score': max(screening_results)},
         )
-        trigger_kyc_stage(resume)
+        if not pipeline_past_stage(resume, 'kyc'):
+            trigger_kyc_stage(resume)
 
     return screening_results
 
 
 def trigger_kyc_stage(resume):
-    models.VettingPipelineRecord.objects.update_or_create(
-        resume=resume,
-        stage='kyc',
-        defaults={'status': 'invited'},
-    )
+    if not _invite_pipeline_stage(resume, 'kyc', 'invited'):
+        return
     token = generate_candidate_token(resume)
     kyc_url = (
         f"{settings.FRONTEND_URL}verify-account"
@@ -176,11 +217,8 @@ def trigger_kyc_stage(resume):
 
 
 def trigger_theoretical_test(resume):
-    models.VettingPipelineRecord.objects.update_or_create(
-        resume=resume,
-        stage='theoretical_test',
-        defaults={'status': 'invited'},
-    )
+    if not _invite_pipeline_stage(resume, 'theoretical_test', 'invited'):
+        return
     token = generate_candidate_token(resume)
     from urllib.parse import quote
     test_url = (
@@ -201,11 +239,8 @@ def trigger_theoretical_test(resume):
 
 
 def trigger_practical_test(resume):
-    models.VettingPipelineRecord.objects.update_or_create(
-        resume=resume,
-        stage='practical_test',
-        defaults={'status': 'invited'},
-    )
+    if not _invite_pipeline_stage(resume, 'practical_test', 'invited'):
+        return
     token = generate_candidate_token(resume)
     from urllib.parse import quote
     test_url = (
@@ -226,11 +261,8 @@ def trigger_practical_test(resume):
 
 
 def trigger_resume_check_stage(resume):
-    models.VettingPipelineRecord.objects.update_or_create(
-        resume=resume,
-        stage='resume_check',
-        defaults={'status': 'pending'},
-    )
+    if not _invite_pipeline_stage(resume, 'resume_check', 'pending'):
+        return
     current_time = timezone.now().time()
     today = timezone.now().date()
 
@@ -448,6 +480,28 @@ def get_pipeline_status(request, resume_id):
     records = models.VettingPipelineRecord.objects.filter(resume=resume).order_by('created_at')
     serializer = serializers.VettingPipelineRecordSerializer(records, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def get_candidate_info(request, resume_id):
+    """Returns basic candidate profile fields for KYC forms. Requires candidate Bearer token."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response({
+        'candidate_id': str(resume.id),
+        'full_name': resume.full_name,
+        'email': resume.email,
+        'position': resume.applied_position.name if resume.applied_position else None,
+    })
 
 
 @api_view(['POST'])

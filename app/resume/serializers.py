@@ -25,7 +25,7 @@ class ScreeningConfigSerializer(serializers.ModelSerializer):
 class FieldSerializer(serializers.ModelSerializer):    
     class Meta:
         model = models.Field
-        fields = ['id', 'name', 'description']
+        fields = ['id', 'name', 'description', 'accepting_applications']
         read_only_fields = ['id']
 
 class FullAssessmentSerializer(serializers.ModelSerializer):

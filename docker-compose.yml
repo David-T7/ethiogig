@@ -20,7 +20,6 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
       - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
       - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
       - SURVEILLANCE_SERVICE_URL=http://localhost:8003
@@ -59,7 +58,6 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
       - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
       - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
       - SURVEILLANCE_SERVICE_URL=http://localhost:8003
@@ -82,7 +80,6 @@ services:
       - DB_NAME=devdb
       - DB_USER=devuser
       - DB_PASS=changeme
-      - GEMINI_API_KEY=AIzaSyAsYCOJCOtGraMuFe3CAE8Ni9KVD_ca0GA
       - THEORETICAL_TEST_SERVICE_URL=http://localhost:8001
       - PRACTICAL_TEST_SERVICE_URL=http://localhost:8002
       - SURVEILLANCE_SERVICE_URL=http://localhost:8003
