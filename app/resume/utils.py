@@ -155,5 +155,32 @@ def create_freelancer_from_resume(resume):
         assessment.practical_test_score = practical.score
     assessment.save()
 
+    try:
+        progress = models.CandidateVettingProgress.objects.filter(resume=resume).first()
+        if progress and progress.verified_technologies:
+            existing = json.loads(freelancer.skills) if freelancer.skills else []
+            for tech in progress.verified_technologies:
+                name = tech.get('name')
+                if not name:
+                    continue
+                existing.extend([
+                    {
+                        'name': name,
+                        'type': 'theoretical',
+                        'score': tech.get('theoretical_score'),
+                        'stack': progress.selected_stack_slug,
+                    },
+                    {
+                        'name': name,
+                        'type': 'practical',
+                        'score': tech.get('practical_score'),
+                        'stack': progress.selected_stack_slug,
+                    },
+                ])
+            freelancer.skills = json.dumps(existing)
+            freelancer.save(update_fields=['skills'])
+    except Exception:
+        pass
+
     print(f"Freelancer created: {freelancer_created}, Freelancer: {freelancer.full_name}")
     return freelancer

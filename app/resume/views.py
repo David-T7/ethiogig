@@ -27,6 +27,12 @@ from core import models
 from core.models import Resume, ScreeningResult, ScreeningConfig, Field, Services, AssessmentTermination, FullAssessment
 from . import serializers
 from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_result_email, create_freelancer_from_resume
+from .vetting_catalog import (
+    MIN_TECHNOLOGIES_TO_PASS,
+    stacks_for_position,
+    technologies_for_stack,
+    normalize_category,
+)
 
 from uuid import UUID
 
@@ -141,6 +147,48 @@ def generate_candidate_token(resume):
         'exp': datetime.utcnow() + timedelta(days=7),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+
+def generate_candidate_action_token(resume_id, purpose):
+    payload = {
+        'user_id': str(resume_id),
+        'purpose': purpose,
+        'role': 'candidate_action',
+        'exp': datetime.utcnow() + timedelta(hours=24),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+
+def decode_candidate_action_token(token, expected_purpose):
+    if not token:
+        return None, Response({'error': 'Token is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        return None, Response({'error': 'This link has expired. Request a new one from your application status page.'}, status=status.HTTP_400_BAD_REQUEST)
+    except jwt.InvalidTokenError:
+        return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if payload.get('role') != 'candidate_action' or payload.get('purpose') != expected_purpose:
+        return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    return payload, None
+
+
+def _send_candidate_account_link_email(resume, subject, path, action_label):
+    full_url = f"{settings.FRONTEND_URL}{path}"
+    html_content = f"""
+    <html>
+        <body>
+            <p>Hello {resume.full_name},</p>
+            <p>You requested to {action_label} for your EthioGurus application.</p>
+            <p>Click the link below to continue. This link expires in 24 hours.</p>
+            <p><a href="{full_url}">{action_label}</a></p>
+            <p>If you did not request this, you can ignore this email.</p>
+        </body>
+    </html>
+    """
+    send_email(resume.email, subject, html_content)
 
 
 def send_resume_for_screening(resume):
@@ -383,6 +431,69 @@ def _authenticate_candidate(request, resume_id):
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
+def candidate_login_by_email(request):
+    """
+    Applicant login using the email and password from the freelancer application form.
+    Not the same as /api/user/login/ (Django User accounts).
+    """
+    email = (request.data.get('email') or '').strip()
+    password = request.data.get('password')
+
+    if not email or not password:
+        return Response(
+            {'error': 'Email and password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    resumes = models.Resume.objects.filter(email__iexact=email, is_email_verified=True).select_related(
+        'applied_position'
+    )
+    matching = [r for r in resumes if r.check_password(password)]
+
+    if not matching:
+        return Response(
+            {
+                'error': (
+                    'No verified application found for this email and password. '
+                    'Use the password you set when you applied, and verify your email first.'
+                )
+            },
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if len(matching) > 1:
+        return Response(
+            {
+                'requires_selection': True,
+                'applications': [
+                    {
+                        'candidate_id': str(r.id),
+                        'full_name': r.full_name,
+                        'position': r.applied_position.name if r.applied_position else None,
+                    }
+                    for r in matching
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    resume = matching[0]
+    token = generate_candidate_token(resume)
+    return Response(
+        {
+            'token': token,
+            'candidate_id': str(resume.id),
+            'full_name': resume.full_name,
+            'position': resume.applied_position.name if resume.applied_position else None,
+            'expires_in': 7 * 24 * 3600,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def get_candidate_token(request, resume_id):
     """
     Issues a 7-day JWT for microservice access.
@@ -405,6 +516,297 @@ def get_candidate_token(request, resume_id):
         'candidate_id': str(resume.id),
         'expires_in': 7 * 24 * 3600,
     })
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def change_candidate_password(request, resume_id):
+    """
+    Change the application password for a candidate (Resume record).
+    Requires candidate Bearer token plus current password.
+    """
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    current_password = request.data.get('current_password')
+    new_password = request.data.get('new_password')
+
+    if not current_password or not new_password:
+        return Response(
+            {'error': 'current_password and new_password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(new_password) < 5:
+        return Response(
+            {'error': 'New password must be at least 5 characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not resume.check_password(current_password):
+        return Response({'error': 'Current password is incorrect.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if current_password == new_password:
+        return Response(
+            {'error': 'New password must be different from your current password.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    resume.password = make_password(new_password)
+    resume.save(update_fields=['password'])
+
+    new_token = generate_candidate_token(resume)
+    return Response(
+        {
+            'message': 'Application password updated successfully.',
+            'token': new_token,
+            'candidate_id': str(resume.id),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def request_password_change_link(request, resume_id):
+    """Email a secure link to change the application password."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    token = generate_candidate_action_token(resume.id, 'change_password')
+    _send_candidate_account_link_email(
+        resume,
+        'Change your application password',
+        f'application/change-password?token={token}',
+        'change your application password',
+    )
+    return Response(
+        {'message': f'A password change link was sent to {resume.email}.'},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def confirm_password_change(request):
+    """Complete password change using the token from email."""
+    token = request.data.get('token')
+    new_password = request.data.get('new_password')
+
+    action_payload, err = decode_candidate_action_token(token, 'change_password')
+    if err:
+        return err
+
+    if not new_password:
+        return Response({'error': 'new_password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(new_password) < 5:
+        return Response(
+            {'error': 'New password must be at least 5 characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        resume = models.Resume.objects.get(id=action_payload['user_id'])
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    resume.password = make_password(new_password)
+    resume.save(update_fields=['password'])
+
+    return Response(
+        {'message': 'Your application password was updated. Sign in again to view your status.'},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def request_email_change_link(request, resume_id):
+    """Email a secure link to change the application email address."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    token = generate_candidate_action_token(resume.id, 'change_email')
+    _send_candidate_account_link_email(
+        resume,
+        'Change your application email',
+        f'application/change-email?token={token}',
+        'change your application email',
+    )
+    return Response(
+        {'message': f'An email change link was sent to {resume.email}.'},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def confirm_email_change(request):
+    """Complete email change using the token from email; verifies the new address."""
+    token = request.data.get('token')
+    new_email = (request.data.get('new_email') or '').strip().lower()
+
+    action_payload, err = decode_candidate_action_token(token, 'change_email')
+    if err:
+        return err
+
+    if not new_email:
+        return Response({'error': 'new_email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        resume = models.Resume.objects.get(id=action_payload['user_id'])
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if resume.email.lower() == new_email:
+        return Response({'error': 'That is already your current email address.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if models.Resume.objects.filter(email__iexact=new_email, is_email_verified=True).exclude(id=resume.id).exists():
+        return Response(
+            {'error': 'This email is already used by another verified application.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    resume.email = new_email
+    resume.is_email_verified = False
+    resume.verification_token = get_random_string(32)
+    resume.save(update_fields=['email', 'is_email_verified', 'verification_token'])
+
+    send_verification_email(resume)
+
+    return Response(
+        {
+            'message': (
+                f'Your email was updated to {new_email}. '
+                'Check your inbox to verify the new address before signing in again.'
+            ),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def report_proctoring_violation(request, resume_id):
+    """
+    Records proctoring violations during candidate tests (camera / identity).
+    Repeated failures or serious violations place the application on hold.
+    """
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    violation_type = (request.data.get('violation_type') or 'pause').strip().lower()
+    stage = request.data.get('stage') or 'theoretical_test'
+    reason = (request.data.get('reason') or 'Proctoring policy violation').strip()
+
+    if stage not in PIPELINE_STAGES:
+        stage = 'theoretical_test'
+
+    if violation_type not in ('pause', 'repeated_pause', 'terminate'):
+        return Response(
+            {'error': 'Invalid violation_type.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if violation_type == 'pause':
+        return Response({'held': False, 'message': 'Recorded.'}, status=status.HTTP_200_OK)
+
+    existing_hold = models.ApplicationOnHold.objects.filter(
+        email=resume.email,
+        position=resume.applied_position,
+        hold_until__gt=timezone.now(),
+    ).order_by('-hold_until').first()
+    if existing_hold:
+        return Response(
+            {
+                'held': True,
+                'hold_until': existing_hold.hold_until.isoformat(),
+                'stage': stage,
+                'message': (
+                    f'Your application is on hold until '
+                    f'{existing_hold.hold_until.strftime("%B %d, %Y")}.'
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    hold_days = 30 if violation_type == 'terminate' else 14
+    hold_until = timezone.now() + timedelta(days=hold_days)
+
+    models.ApplicationOnHold.objects.create(
+        resume=resume,
+        email=resume.email,
+        position=resume.applied_position,
+        hold_until=hold_until,
+        reason=reason[:2000],
+    )
+
+    record, _ = models.VettingPipelineRecord.objects.get_or_create(
+        resume=resume,
+        stage=stage,
+    )
+    record.status = 'on_hold'
+    record.notes = (
+        f"Proctoring violation ({violation_type}): {reason[:500]}. "
+        f"Hold until {hold_until.strftime('%Y-%m-%d')}."
+    )
+    record.save()
+
+    position_name = resume.applied_position.name if resume.applied_position else 'your application'
+    html_content = f"""
+    <html><body>
+    <p>Hello {resume.full_name},</p>
+    <p>Your application for <strong>{position_name}</strong> has been placed on hold due to a
+    proctoring policy issue during your assessment.</p>
+    <p><strong>Reason:</strong> {reason}</p>
+    <p>You may reapply after <strong>{hold_until.strftime('%B %d, %Y')}</strong>.</p>
+    <p>If you believe this was a mistake, contact support with your application email.</p>
+    </body></html>
+    """
+    send_email(resume.email, 'Application on hold — proctoring policy', html_content)
+
+    return Response(
+        {
+            'held': True,
+            'hold_until': hold_until.isoformat(),
+            'stage': stage,
+            'message': (
+                f'Your application is on hold until {hold_until.strftime("%B %d, %Y")} '
+                f'due to proctoring violations. Check your email for details.'
+            ),
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['POST'])
@@ -501,6 +903,287 @@ def get_candidate_info(request, resume_id):
         'full_name': resume.full_name,
         'email': resume.email,
         'position': resume.applied_position.name if resume.applied_position else None,
+    })
+
+
+def _get_or_create_vetting_progress(resume):
+    position_name = resume.applied_position.name if resume.applied_position else ''
+    progress, _ = models.CandidateVettingProgress.objects.get_or_create(
+        resume=resume,
+        defaults={'position_name': position_name, 'technology_results': {}},
+    )
+    if position_name and progress.position_name != position_name:
+        progress.position_name = position_name
+        progress.save(update_fields=['position_name', 'updated_at'])
+    return progress
+
+
+def _count_technology_passes(technology_results, test_kind):
+    count = 0
+    for tech_data in (technology_results or {}).values():
+        entry = tech_data.get(test_kind) or {}
+        if entry.get('passed'):
+            count += 1
+    return count
+
+
+def _count_full_stack_passes(technology_results, required_technologies):
+    count = 0
+    for tech in required_technologies:
+        tech_data = (technology_results or {}).get(tech) or {}
+        if (tech_data.get('theoretical') or {}).get('passed') and (tech_data.get('practical') or {}).get('passed'):
+            count += 1
+    return count
+
+
+def _sync_verified_technologies(progress, required_technologies):
+    verified = []
+    for tech in required_technologies:
+        tech_data = (progress.technology_results or {}).get(tech) or {}
+        if (tech_data.get('theoretical') or {}).get('passed') and (tech_data.get('practical') or {}).get('passed'):
+            verified.append({
+                'name': tech,
+                'theoretical_score': (tech_data.get('theoretical') or {}).get('score'),
+                'practical_score': (tech_data.get('practical') or {}).get('score'),
+                'stack': progress.selected_stack_slug,
+            })
+    progress.verified_technologies = verified
+    progress.save(update_fields=['verified_technologies', 'updated_at'])
+    return verified
+
+
+def _maybe_advance_vetting_stages(resume, progress):
+    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
+    if not required:
+        return None
+
+    theory_count = _count_technology_passes(progress.technology_results, 'theoretical')
+    practical_count = _count_technology_passes(progress.technology_results, 'practical')
+    advanced = []
+
+    if theory_count >= MIN_TECHNOLOGIES_TO_PASS:
+        record, _ = models.VettingPipelineRecord.objects.get_or_create(
+            resume=resume, stage='theoretical_test',
+        )
+        if record.status != 'passed':
+            record.status = 'passed'
+            record.notes = (
+                f'Passed theoretical assessments for {theory_count} technologies '
+                f'(minimum {MIN_TECHNOLOGIES_TO_PASS}). Stack: {progress.selected_stack_name}.'
+            )
+            record.save()
+            advance_pipeline(resume, 'theoretical_test')
+            advanced.append('theoretical_test')
+
+    if practical_count >= MIN_TECHNOLOGIES_TO_PASS:
+        record, _ = models.VettingPipelineRecord.objects.get_or_create(
+            resume=resume, stage='practical_test',
+        )
+        if record.status != 'passed':
+            record.status = 'passed'
+            record.notes = (
+                f'Passed practical assessments for {practical_count} technologies '
+                f'(minimum {MIN_TECHNOLOGIES_TO_PASS}). Stack: {progress.selected_stack_name}.'
+            )
+            record.save()
+            advance_pipeline(resume, 'practical_test')
+            advanced.append('practical_test')
+
+    _sync_verified_technologies(progress, required)
+    return advanced
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def get_vetting_stacks(request, resume_id):
+    """Returns available stacks for the candidate's applied position."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    position = resume.applied_position.name if resume.applied_position else ''
+    stacks = stacks_for_position(position)
+    progress = _get_or_create_vetting_progress(resume)
+
+    return Response({
+        'position': position,
+        'stacks': stacks,
+        'min_technologies_to_pass': MIN_TECHNOLOGIES_TO_PASS,
+        'selected_stack_slug': progress.selected_stack_slug,
+        'selected_stack_name': progress.selected_stack_name,
+    })
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def vetting_progress(request, resume_id):
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    progress = _get_or_create_vetting_progress(resume)
+
+    if request.method == 'POST':
+        stack_slug = (request.data.get('stack_slug') or '').strip()
+        if not stack_slug:
+            return Response({'error': 'stack_slug is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        position = progress.position_name or (resume.applied_position.name if resume.applied_position else '')
+        stack = next((s for s in stacks_for_position(position) if s['slug'] == stack_slug), None)
+        if not stack:
+            return Response({'error': 'Unknown stack for this position.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        progress.selected_stack_slug = stack_slug
+        progress.selected_stack_name = stack['name']
+        progress.save(update_fields=['selected_stack_slug', 'selected_stack_name', 'updated_at'])
+
+        for stage in ('theoretical_test', 'practical_test'):
+            record, _ = models.VettingPipelineRecord.objects.get_or_create(resume=resume, stage=stage)
+            if record.status in ('pending', 'invited'):
+                record.status = 'in_progress'
+                record.save(update_fields=['status', 'updated_at'])
+
+    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
+    theory_passed = _count_technology_passes(progress.technology_results, 'theoretical')
+    practical_passed = _count_technology_passes(progress.technology_results, 'practical')
+    full_passed = _count_full_stack_passes(progress.technology_results, required)
+
+    return Response({
+        'position': progress.position_name,
+        'selected_stack_slug': progress.selected_stack_slug,
+        'selected_stack_name': progress.selected_stack_name,
+        'required_technologies': required,
+        'min_technologies_to_pass': MIN_TECHNOLOGIES_TO_PASS,
+        'technology_results': progress.technology_results,
+        'verified_technologies': progress.verified_technologies,
+        'counts': {
+            'theoretical_passed': theory_passed,
+            'practical_passed': practical_passed,
+            'fully_passed': full_passed,
+            'theoretical_remaining': max(0, MIN_TECHNOLOGIES_TO_PASS - theory_passed),
+            'practical_remaining': max(0, MIN_TECHNOLOGIES_TO_PASS - practical_passed),
+        },
+        'requirements_met': {
+            'theoretical': theory_passed >= MIN_TECHNOLOGIES_TO_PASS,
+            'practical': practical_passed >= MIN_TECHNOLOGIES_TO_PASS,
+        },
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def report_vetting_tech_result(request, resume_id):
+    """
+    Records a single technology assessment result (theoretical or practical).
+    Advances pipeline stages when minimum passes are met.
+    """
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    technology = (request.data.get('technology') or '').strip()
+    test_kind = (request.data.get('test_kind') or '').strip().lower()
+    passed = request.data.get('passed')
+    score = request.data.get('score')
+    submission_id = request.data.get('submission_id')
+    test_id = request.data.get('test_id')
+
+    if not technology:
+        return Response({'error': 'technology is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if test_kind not in ('theoretical', 'practical'):
+        return Response({'error': "test_kind must be 'theoretical' or 'practical'."}, status=status.HTTP_400_BAD_REQUEST)
+    if passed is None:
+        return Response({'error': 'passed is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    progress = _get_or_create_vetting_progress(resume)
+    if not progress.selected_stack_slug:
+        return Response({'error': 'Select an assessment stack before submitting results.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
+    if technology not in required:
+        return Response(
+            {'error': f'{technology} is not part of your selected stack.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if test_kind == 'practical':
+        theory_entry = (progress.technology_results or {}).get(technology, {}).get('theoretical') or {}
+        if not theory_entry.get('passed'):
+            return Response(
+                {'error': f'Pass the theoretical {technology} test before the practical challenge.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    results = dict(progress.technology_results or {})
+    tech_entry = dict(results.get(technology) or {})
+    tech_entry[test_kind] = {
+        'passed': bool(passed),
+        'score': score,
+        'submission_id': str(submission_id) if submission_id else None,
+        'test_id': str(test_id) if test_id else None,
+        'recorded_at': timezone.now().isoformat(),
+    }
+    results[technology] = tech_entry
+    progress.technology_results = results
+    progress.save(update_fields=['technology_results', 'updated_at'])
+
+    stage_key = 'theoretical_test' if test_kind == 'theoretical' else 'practical_test'
+    record, _ = models.VettingPipelineRecord.objects.get_or_create(resume=resume, stage=stage_key)
+    if record.status in ('pending', 'invited'):
+        record.status = 'in_progress'
+        record.save(update_fields=['status', 'updated_at'])
+
+    if not passed:
+        record.notes = f'Failed {test_kind} for {technology} (score: {score}). You may retry this test from the hub.'
+        record.save(update_fields=['notes', 'updated_at'])
+        return Response({
+            'recorded': technology,
+            'test_kind': test_kind,
+            'passed': False,
+            'requirements_met': {
+                'theoretical': _count_technology_passes(progress.technology_results, 'theoretical')
+                >= MIN_TECHNOLOGIES_TO_PASS,
+                'practical': _count_technology_passes(progress.technology_results, 'practical')
+                >= MIN_TECHNOLOGIES_TO_PASS,
+            },
+        })
+
+    advanced_stages = _maybe_advance_vetting_stages(resume, progress)
+    theory_count = _count_technology_passes(progress.technology_results, 'theoretical')
+    practical_count = _count_technology_passes(progress.technology_results, 'practical')
+
+    return Response({
+        'recorded': technology,
+        'test_kind': test_kind,
+        'passed': True,
+        'advanced_stages': advanced_stages or [],
+        'counts': {
+            'theoretical_passed': theory_count,
+            'practical_passed': practical_count,
+        },
+        'requirements_met': {
+            'theoretical': theory_count >= MIN_TECHNOLOGIES_TO_PASS,
+            'practical': practical_count >= MIN_TECHNOLOGIES_TO_PASS,
+        },
+        'verified_technologies': progress.verified_technologies,
     })
 
 

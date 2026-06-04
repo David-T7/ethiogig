@@ -737,3 +737,18 @@ class VettingPipelineRecord(models.Model):
     def __str__(self):
         return f"{self.resume.email} — {self.stage} ({self.status})"
 
+
+class CandidateVettingProgress(models.Model):
+    """Tracks stack choice and per-technology theory/practical results during vetting."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.OneToOneField('Resume', on_delete=models.CASCADE, related_name='vetting_progress')
+    position_name = models.CharField(max_length=255, blank=True)
+    selected_stack_slug = models.CharField(max_length=100, blank=True)
+    selected_stack_name = models.CharField(max_length=255, blank=True)
+    technology_results = models.JSONField(default=dict, blank=True)
+    verified_technologies = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Vetting progress for {self.resume.email}"
+
