@@ -90,7 +90,18 @@ admin.site.register(models.User, UserAdmin)
 admin.site.register(models.Freelancer, FreelancerAdmin)
 admin.site.register(models.Client, ClientAdmin)
 admin.site.register(models.PaymentMethod)
-admin.site.register(models.Services)
+class ServiceVettingStackInline(admin.TabularInline):
+    model = models.ServiceVettingStack
+    extra = 0
+
+
+class ServicesAdmin(admin.ModelAdmin):
+    list_display = ('display_name', 'name', 'slug', 'field')
+    search_fields = ('name', 'hireable_role_label', 'slug')
+    filter_horizontal = ('technologies',)
+    inlines = [ServiceVettingStackInline]
+
+admin.site.register(models.Services, ServicesAdmin)
 admin.site.register(models.Technology)
 admin.site.register(models.Notification)
 admin.site.register(models.Appointment)

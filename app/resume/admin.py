@@ -91,11 +91,48 @@ class CandidateVettingProgressAdmin(admin.ModelAdmin):
 
 @admin.register(models.ApplicationOnHold)
 class ApplicationOnHoldAdmin(admin.ModelAdmin):
-    list_display = ('email', 'position', 'hold_until', 'created_at')
+    list_display = ('email', 'position', 'hold_until', 'is_active', 'reason_short', 'created_at')
     list_filter = ('position',)
-    search_fields = ('email', 'reason')
+    search_fields = ('email', 'reason', 'resume__full_name')
     raw_id_fields = ('resume', 'position')
     readonly_fields = ('id', 'created_at')
+    actions = ['delete_expired_holds', 'delete_all_selected_holds']
+
+    @admin.display(boolean=True, description='Active now')
+    def is_active(self, obj):
+        return bool(obj.hold_until and obj.hold_until > timezone.now())
+
+    @admin.display(description='Reason')
+    def reason_short(self, obj):
+        text = (obj.reason or '').strip()
+        return text[:80] + ('…' if len(text) > 80 else '') if text else '—'
+
+    @admin.action(description='Delete expired holds (selected)')
+    def delete_expired_holds(self, request, queryset):
+        deleted, _ = queryset.filter(hold_until__lte=timezone.now()).delete()
+        self.message_user(request, f'Deleted {deleted} expired hold(s).', messages.SUCCESS)
+
+    @admin.action(description='Delete selected holds (active or expired)')
+    def delete_all_selected_holds(self, request, queryset):
+        deleted, _ = queryset.delete()
+        self.message_user(request, f'Deleted {deleted} hold(s).', messages.SUCCESS)
+
+
+@admin.register(models.ScreeningConfig)
+class ScreeningConfigAdmin(admin.ModelAdmin):
+    list_display = ('passing_score_threshold', 'disable_application_holds', 'updated_at')
+    fields = ('passing_score_threshold', 'disable_application_holds')
+    readonly_fields = ('updated_at',)
+
+    def has_add_permission(self, request):
+        if models.ScreeningConfig.objects.exists():
+            return False
+        return super().has_add_permission(request)
+
+    def changelist_view(self, request, extra_context=None):
+        if not models.ScreeningConfig.objects.exists():
+            models.ScreeningConfig.objects.create()
+        return super().changelist_view(request, extra_context=extra_context)
 
 
 @admin.register(models.Resume)
@@ -137,6 +174,7 @@ class ResumeAdmin(admin.ModelAdmin):
         'ensure_all_pipeline_stages',
         'set_pipeline_invited_from_current',
         'clear_application_holds_for_email',
+        'clear_holds_and_reset_on_hold_stages',
     ]
 
     @admin.display(description='Pipeline')
@@ -205,7 +243,7 @@ class ResumeAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
-    @admin.action(description='Delete active application holds for selected resume emails')
+    @admin.action(description='Remove active holds for selected candidates')
     def clear_application_holds_for_email(self, request, queryset):
         emails = list(queryset.values_list('email', flat=True))
         deleted, _ = models.ApplicationOnHold.objects.filter(
@@ -214,10 +252,59 @@ class ResumeAdmin(admin.ModelAdmin):
         ).delete()
         self.message_user(
             request,
-            f'Removed {deleted} active hold(s).',
+            f'Removed {deleted} active hold(s) for {len(emails)} candidate(s).',
+            messages.SUCCESS,
+        )
+
+    @admin.action(description='Remove holds + set on-hold pipeline stages back to In progress')
+    def clear_holds_and_reset_on_hold_stages(self, request, queryset):
+        emails = list(queryset.values_list('email', flat=True))
+        deleted, _ = models.ApplicationOnHold.objects.filter(email__in=emails).delete()
+        reset = models.VettingPipelineRecord.objects.filter(
+            resume__email__in=emails,
+            status='on_hold',
+        ).update(status='in_progress')
+        self.message_user(
+            request,
+            f'Removed {deleted} hold record(s) and reset {reset} pipeline stage(s) from on hold.',
             messages.SUCCESS,
         )
 
 
+class StackSkillInline(admin.TabularInline):
+    model = models.StackSkill
+    extra = 0
+    ordering = ('sort_order',)
+
+
+@admin.register(models.VettingStack)
+class VettingStackAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'is_active')
+    search_fields = ('name', 'slug')
+    inlines = [StackSkillInline]
+
+
+@admin.register(models.VettingSkill)
+class VettingSkillAdmin(admin.ModelAdmin):
+    list_display = (
+        'name', 'slug', 'technology', 'content_version', 'content_owner', 'review_practicals', 'is_active',
+    )
+    search_fields = ('name', 'slug')
+    list_filter = ('is_active', 'review_practicals')
+    raw_id_fields = ('technology',)
+
+
+class ServiceVettingStackInline(admin.TabularInline):
+    model = models.ServiceVettingStack
+    extra = 0
+
+
+@admin.register(models.SkillCertificate)
+class SkillCertificateAdmin(admin.ModelAdmin):
+    list_display = ('resume', 'skill', 'stack', 'verified_at', 'expires_at', 'is_active')
+    list_filter = ('is_active',)
+    search_fields = ('resume__email', 'skill__name')
+    raw_id_fields = ('resume', 'freelancer', 'skill', 'stack')
+
+
 admin.site.register(models.ScreeningResult)
-admin.site.register(models.ScreeningConfig)

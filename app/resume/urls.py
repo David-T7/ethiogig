@@ -22,6 +22,7 @@ urlpatterns = [
     path('resumes/<uuid:resume_id>/proctoring-violation/', views.report_proctoring_violation, name='proctoring-violation'),
     path('resumes/<uuid:resume_id>/pipeline-stage/', views.report_stage_result, name='report-stage-result'),
     path('resumes/<uuid:resume_id>/pipeline-status/', views.get_pipeline_status, name='pipeline-status'),
+    path('resumes/<uuid:resume_id>/resend-hold-notification/', views.resend_hold_notification, name='resend-hold-notification'),
     path('resumes/<uuid:resume_id>/candidate-info/', views.get_candidate_info, name='candidate-info'),
     path('resumes/<uuid:resume_id>/vetting-stacks/', views.get_vetting_stacks, name='vetting-stacks'),
     path('resumes/<uuid:resume_id>/vetting-progress/', views.vetting_progress, name='vetting-progress'),

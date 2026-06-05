@@ -82,7 +82,12 @@ PIPELINE_STAGES = [
 |---|---|---|---|
 | POST | `/api/resumes/` | Public | Submit application |
 | POST | `/api/verify-email/` | Public | Email verification → triggers AI screening |
-| GET | `/api/resumes/{id}/pipeline-status/` | Candidate Bearer | Stage list for status page |
+| GET | `/api/resumes/{id}/pipeline-status/` | Candidate Bearer | `{ stages, application_hold, hold_policy }` |
+| POST | `/api/resumes/{id}/resend-hold-notification/` | Candidate Bearer | Resend on-hold email |
+| GET | `/api/resumes/{id}/vetting-stacks/` | Candidate Bearer | Stacks for applied position |
+| GET/POST | `/api/resumes/{id}/vetting-progress/` | Candidate Bearer | Stack selection + skill progress |
+| POST | `/api/resumes/{id}/vetting-tech-result/` | Candidate Bearer | Per-skill theory/practical result |
+| POST | `/api/resumes/{id}/proctoring-violation/` | Candidate Bearer | Camera hold (14d/30d) |
 | GET | `/api/resumes/{id}/candidate-info/` | Candidate Bearer | Name/email for KYC forms |
 | POST | `/api/resumes/candidate-login/` | Public | Applicant sign-in by email + application password |
 | POST | `/api/resumes/{id}/candidate-token/` | Password body | Re-issue 7-day JWT |
@@ -157,8 +162,27 @@ Helpers: `decode_candidate_action_token()`, `confirm_password_change`, `confirm_
 ## Models (vetting)
 
 - **`Resume`** — applicant record; ID doubles as candidate `user_id`.
-- **`VettingPipelineRecord`** — per-stage status (`invited`, `passed`, `failed`, …), score, timestamps.
+- **`VettingPipelineRecord`** — per-stage status (`invited`, `passed`, `failed`, `on_hold`, …), score, timestamps.
+- **`CandidateVettingProgress`** — selected stack, `technology_results` JSON per skill.
+- **`VettingSkill` / `VettingStack` / `StackSkill` / `ServiceVettingStack`** — DB taxonomy (required vs optional skills).
+- **`SkillCertificate`** — 365-day skill verification after theory + practical pass.
+- **`ApplicationOnHold`** — email + position + `hold_until`; enforced unless `ScreeningConfig.disable_application_holds`.
 - **`ScreeningResult`** — AI screening scores per position.
+
+### Taxonomy commands
+
+```bash
+python manage.py sync_vetting_taxonomy
+python manage.py link_vetting_test_ids   # needs test services on 8001/8002; use host.docker.internal from Docker
+```
+
+Logic: `resume/vetting_taxonomy_service.py` (DB-first, fallback `vetting_catalog.py`).
+
+### Hold policy (`resume/hold_policy.py`)
+
+- `application_holds_enabled()` — reads `ScreeningConfig.disable_application_holds`.
+- `active_application_hold(resume)` — returns `None` when holds disabled for testing.
+- Hold emails: `_safe_send_application_hold_email()` — subject `Application on hold — EthioGurus`.
 
 ---
 
@@ -207,11 +231,13 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 
 | Item | Status |
 |------|--------|
-| `vetting_catalog.py` + stacks per service name | Done |
+| DB taxonomy + `sync_vetting_taxonomy` / `link_vetting_test_ids` | Done |
 | `CandidateVettingProgress` + vetting APIs | Done |
-| `report_proctoring_violation` | Done |
-| Admin: Resume pipeline inlines, `VettingPipelineRecord` | Done |
-| Migration `0106_candidatevettingprogress` | Run on deploy |
+| Pass **all required skills** per stack (not fixed count of 2) | Done |
+| `report_proctoring_violation` + hold emails + resend endpoint | Done |
+| `disable_application_holds` on ScreeningConfig (admin) | Done |
+| Admin: holds clear actions, Screening config, taxonomy models | Done |
+| Migrations `0106`–`0108` | Run on deploy |
 | Security: one-time tokens, rate limits | Planned |
 
 ### Current `Services.name` values (2026-06-02)
@@ -221,7 +247,12 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 
 ### Admin
 
-**Resumes** → edit **Vetting pipeline stages** (status, score, notes). Action: **Ensure all pipeline stages exist**.
+| Task | Location |
+|------|----------|
+| Disable holds (testing) | **Screening configs** → **Disable application holds** |
+| Clear holds | **Resumes** → **Remove holds + reset on-hold stages** |
+| Edit stages | **Resumes** → **Vetting pipeline stages** inline |
+| Taxonomy | **Vetting stacks**, **Vetting skills**, **Services** (stack inline) |
 
 ---
 

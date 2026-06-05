@@ -27,12 +27,9 @@ from core import models
 from core.models import Resume, ScreeningResult, ScreeningConfig, Field, Services, AssessmentTermination, FullAssessment
 from . import serializers
 from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_result_email, create_freelancer_from_resume
-from .vetting_catalog import (
-    MIN_TECHNOLOGIES_TO_PASS,
-    stacks_for_position,
-    technologies_for_stack,
-    normalize_category,
-)
+from .vetting_catalog import MIN_TECHNOLOGIES_TO_PASS
+from . import vetting_taxonomy_service as taxonomy
+from .hold_policy import application_holds_enabled, active_application_hold
 
 from uuid import UUID
 
@@ -55,8 +52,14 @@ class ResumeViewSet(viewsets.ModelViewSet):
             return Response({"error": "Selected services do not exist."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if there are any applications on hold for this email and the applied positions
-        on_hold_positions = models.ApplicationOnHold.objects.filter(email=email, position__in=valid_services).values_list("position__name", flat=True)
-        
+        on_hold_positions = []
+        if application_holds_enabled():
+            on_hold_positions = models.ApplicationOnHold.objects.filter(
+                email=email,
+                position__in=valid_services,
+                hold_until__gt=timezone.now(),
+            ).values_list('position__name', flat=True)
+
         if on_hold_positions:
             return Response(
                 {"error": "Your application is currently on hold for the following positions:", "positions": list(on_hold_positions)},
@@ -214,15 +217,21 @@ def send_resume_for_screening(resume):
         if passed:
             passed_any = True
         else:
-            hold_days = 120 if score < 20 else 60 if score < 40 else 30
-            hold_until = timezone.now() + timedelta(days=hold_days)
-            models.ApplicationOnHold.objects.create(
-                resume=resume,
-                email=resume.email,
-                position=applied_position,
-                hold_until=hold_until,
-                reason=f"AI resume screening failed. Score: {score}. Comments: {comment}",
-            )
+            if application_holds_enabled():
+                hold_days = 120 if score < 20 else 60 if score < 40 else 30
+                hold_until = timezone.now() + timedelta(days=hold_days)
+                models.ApplicationOnHold.objects.create(
+                    resume=resume,
+                    email=resume.email,
+                    position=applied_position,
+                    hold_until=hold_until,
+                    reason=f"AI resume screening failed. Score: {score}. Comments: {comment}",
+                )
+                _safe_send_application_hold_email(
+                    resume,
+                    hold_until,
+                    context='screening',
+                )
 
         ScreeningResult.objects.create(
             resume=resume,
@@ -382,23 +391,19 @@ def _hold_days_for_score(score):
 
 
 def handle_stage_failure(resume, stage, score):
+    if not application_holds_enabled():
+        return
     hold_days = _hold_days_for_score(score)
     hold_until = timezone.now() + timedelta(days=hold_days)
+    reason = f"Did not meet the threshold for stage '{stage}'. Score: {score}."
     models.ApplicationOnHold.objects.create(
         resume=resume,
         email=resume.email,
         position=resume.applied_position,
         hold_until=hold_until,
-        reason=f"Did not meet the threshold for stage '{stage}'. Score: {score}.",
+        reason=reason,
     )
-    html_content = f"""
-    <html><body>
-    <p>Thank you for completing the {stage.replace('_', ' ')} stage.</p>
-    <p>Unfortunately you did not meet the required threshold at this time.</p>
-    <p>You may reapply after <strong>{hold_until.strftime('%B %d, %Y')}</strong>.</p>
-    </body></html>
-    """
-    send_email(resume.email, "Application Update", html_content)
+    _safe_send_application_hold_email(resume, hold_until, context='assessment', reason=reason)
 
 
 def _authenticate_candidate(request, resume_id):
@@ -708,6 +713,76 @@ def confirm_email_change(request):
     )
 
 
+def _application_hold_message(hold_until):
+    return (
+        f'Your application is on hold until {hold_until.strftime("%B %d, %Y")}. '
+        'You cannot start or continue assessments until the hold period ends. '
+        'Check your email for details.'
+    )
+
+
+def _application_hold_email_html(resume, hold_until, *, context='assessment'):
+    position_name = resume.applied_position.name if resume.applied_position else 'your application'
+    status_url = f"{settings.FRONTEND_URL.rstrip('/')}/application/status?candidate_id={resume.id}"
+    context_line = {
+        'assessment': 'an assessment stage did not meet the required threshold',
+        'proctoring': 'a proctoring policy issue during your assessment',
+        'screening': 'your resume did not meet the screening requirements',
+        'admin': 'a review decision on your application',
+    }.get(context, 'a review decision on your application')
+    return f"""
+    <html><body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222;">
+    <p>Hello {resume.full_name},</p>
+    <p>Your application for <strong>{position_name}</strong> is <strong>on hold</strong> because
+    {context_line}.</p>
+    <p><strong>Hold ends:</strong> {hold_until.strftime('%B %d, %Y')}</p>
+    <p>Until then, you cannot start or continue assessments. You may view your status here:</p>
+    <p><a href="{status_url}">{status_url}</a></p>
+    <p>If you believe this was a mistake, reply to this email or contact support with your
+    application email (<strong>{resume.email}</strong>).</p>
+    <p>Best regards,<br/>EthioGurus Recruitment</p>
+    </body></html>
+    """
+
+
+def _infer_hold_email_context(reason):
+    reason_text = (reason or '').lower()
+    if 'proctoring' in reason_text or 'camera' in reason_text or 'snapshot' in reason_text:
+        return 'proctoring'
+    if 'screening' in reason_text:
+        return 'screening'
+    if 'threshold' in reason_text or 'stage' in reason_text:
+        return 'assessment'
+    return 'admin'
+
+
+def _safe_send_application_hold_email(resume, hold_until, *, context='assessment', reason=None):
+    if context == 'assessment' and reason:
+        context = _infer_hold_email_context(reason)
+    try:
+        send_email(
+            resume.email,
+            'Application on hold — EthioGurus',
+            _application_hold_email_html(resume, hold_until, context=context),
+        )
+        return True
+    except Exception as exc:
+        print(f"Failed to send application hold email to {resume.email}: {exc}")
+        return False
+
+
+def _serialize_application_hold(hold):
+    if not hold or not hold.hold_until:
+        return {'active': False}
+    hold_until = hold.hold_until
+    return {
+        'active': True,
+        'hold_until': hold_until.isoformat(),
+        'hold_until_display': hold_until.strftime('%B %d, %Y'),
+        'message': _application_hold_message(hold_until),
+    }
+
+
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
@@ -741,6 +816,12 @@ def report_proctoring_violation(request, resume_id):
     if violation_type == 'pause':
         return Response({'held': False, 'message': 'Recorded.'}, status=status.HTTP_200_OK)
 
+    if not application_holds_enabled():
+        return Response(
+            {'held': False, 'message': 'Hold policy disabled for testing.'},
+            status=status.HTTP_200_OK,
+        )
+
     existing_hold = models.ApplicationOnHold.objects.filter(
         email=resume.email,
         position=resume.applied_position,
@@ -752,10 +833,7 @@ def report_proctoring_violation(request, resume_id):
                 'held': True,
                 'hold_until': existing_hold.hold_until.isoformat(),
                 'stage': stage,
-                'message': (
-                    f'Your application is on hold until '
-                    f'{existing_hold.hold_until.strftime("%B %d, %Y")}.'
-                ),
+                'message': _serialize_application_hold(existing_hold).get('message'),
             },
             status=status.HTTP_200_OK,
         )
@@ -782,28 +860,19 @@ def report_proctoring_violation(request, resume_id):
     )
     record.save()
 
-    position_name = resume.applied_position.name if resume.applied_position else 'your application'
-    html_content = f"""
-    <html><body>
-    <p>Hello {resume.full_name},</p>
-    <p>Your application for <strong>{position_name}</strong> has been placed on hold due to a
-    proctoring policy issue during your assessment.</p>
-    <p><strong>Reason:</strong> {reason}</p>
-    <p>You may reapply after <strong>{hold_until.strftime('%B %d, %Y')}</strong>.</p>
-    <p>If you believe this was a mistake, contact support with your application email.</p>
-    </body></html>
-    """
-    send_email(resume.email, 'Application on hold — proctoring policy', html_content)
+    _safe_send_application_hold_email(
+        resume,
+        hold_until,
+        context='proctoring',
+        reason=reason,
+    )
 
     return Response(
         {
             'held': True,
             'hold_until': hold_until.isoformat(),
             'stage': stage,
-            'message': (
-                f'Your application is on hold until {hold_until.strftime("%B %d, %Y")} '
-                f'due to proctoring violations. Check your email for details.'
-            ),
+            'message': _application_hold_message(hold_until),
         },
         status=status.HTTP_200_OK,
     )
@@ -881,7 +950,72 @@ def get_pipeline_status(request, resume_id):
 
     records = models.VettingPipelineRecord.objects.filter(resume=resume).order_by('created_at')
     serializer = serializers.VettingPipelineRecordSerializer(records, many=True)
-    return Response(serializer.data)
+    hold = active_application_hold(resume)
+    hold_payload = _serialize_application_hold(hold)
+    if hold:
+        hold_payload['email'] = resume.email
+    return Response({
+        'stages': serializer.data,
+        'application_hold': hold_payload,
+        'hold_policy': {
+            'enforced': application_holds_enabled(),
+        },
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def resend_hold_notification(request, resume_id):
+    """Resend the on-hold notification email for the candidate's active hold."""
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not application_holds_enabled():
+        return Response(
+            {'error': 'Application holds are disabled for testing.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    hold = models.ApplicationOnHold.objects.filter(
+        email=resume.email,
+        position=resume.applied_position,
+        hold_until__gt=timezone.now(),
+    ).order_by('-hold_until').first()
+    if not hold:
+        return Response(
+            {'error': 'There is no active hold on this application.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    sent = _safe_send_application_hold_email(
+        resume,
+        hold.hold_until,
+        reason=hold.reason,
+    )
+    if not sent:
+        return Response(
+            {
+                'error': (
+                    'We could not send the email right now. '
+                    'Please try again in a few minutes or contact support.'
+                ),
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return Response({
+        'message': f'Hold notification sent to {resume.email}.',
+        'email': resume.email,
+        'hold_until': hold.hold_until.isoformat(),
+        'hold_until_display': hold.hold_until.strftime('%B %d, %Y'),
+    })
 
 
 @api_view(['GET'])
@@ -918,78 +1052,48 @@ def _get_or_create_vetting_progress(resume):
     return progress
 
 
-def _count_technology_passes(technology_results, test_kind):
-    count = 0
-    for tech_data in (technology_results or {}).values():
-        entry = tech_data.get(test_kind) or {}
-        if entry.get('passed'):
-            count += 1
-    return count
-
-
-def _count_full_stack_passes(technology_results, required_technologies):
-    count = 0
-    for tech in required_technologies:
-        tech_data = (technology_results or {}).get(tech) or {}
-        if (tech_data.get('theoretical') or {}).get('passed') and (tech_data.get('practical') or {}).get('passed'):
-            count += 1
-    return count
-
-
-def _sync_verified_technologies(progress, required_technologies):
-    verified = []
-    for tech in required_technologies:
-        tech_data = (progress.technology_results or {}).get(tech) or {}
-        if (tech_data.get('theoretical') or {}).get('passed') and (tech_data.get('practical') or {}).get('passed'):
-            verified.append({
-                'name': tech,
-                'theoretical_score': (tech_data.get('theoretical') or {}).get('score'),
-                'practical_score': (tech_data.get('practical') or {}).get('score'),
-                'stack': progress.selected_stack_slug,
-            })
-    progress.verified_technologies = verified
-    progress.save(update_fields=['verified_technologies', 'updated_at'])
-    return verified
-
-
 def _maybe_advance_vetting_stages(resume, progress):
-    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
-    if not required:
+    stack = taxonomy.resolve_stack(progress, resume)
+    skills = taxonomy.get_stack_skills(stack, progress, resume)
+    if not skills:
         return None
 
-    theory_count = _count_technology_passes(progress.technology_results, 'theoretical')
-    practical_count = _count_technology_passes(progress.technology_results, 'practical')
+    results = progress.technology_results or {}
+    theory_met = taxonomy.required_skills_met(skills, results, 'theoretical')
+    practical_met = taxonomy.required_skills_met(skills, results, 'practical')
+    theory_count = taxonomy.count_passes_by_kind(skills, results, 'theoretical', required_only=True)
+    practical_count = taxonomy.count_passes_by_kind(skills, results, 'practical', required_only=True)
     advanced = []
 
-    if theory_count >= MIN_TECHNOLOGIES_TO_PASS:
+    if theory_met:
         record, _ = models.VettingPipelineRecord.objects.get_or_create(
             resume=resume, stage='theoretical_test',
         )
         if record.status != 'passed':
             record.status = 'passed'
             record.notes = (
-                f'Passed theoretical assessments for {theory_count} technologies '
-                f'(minimum {MIN_TECHNOLOGIES_TO_PASS}). Stack: {progress.selected_stack_name}.'
+                f'Passed all required theoretical skills ({theory_count}). '
+                f'Stack: {progress.selected_stack_name}.'
             )
             record.save()
             advance_pipeline(resume, 'theoretical_test')
             advanced.append('theoretical_test')
 
-    if practical_count >= MIN_TECHNOLOGIES_TO_PASS:
+    if practical_met:
         record, _ = models.VettingPipelineRecord.objects.get_or_create(
             resume=resume, stage='practical_test',
         )
         if record.status != 'passed':
             record.status = 'passed'
             record.notes = (
-                f'Passed practical assessments for {practical_count} technologies '
-                f'(minimum {MIN_TECHNOLOGIES_TO_PASS}). Stack: {progress.selected_stack_name}.'
+                f'Passed all required practical skills ({practical_count}). '
+                f'Stack: {progress.selected_stack_name}.'
             )
             record.save()
             advance_pipeline(resume, 'practical_test')
             advanced.append('practical_test')
 
-    _sync_verified_technologies(progress, required)
+    taxonomy.sync_verified_from_results(progress, stack, resume)
     return advanced
 
 
@@ -1007,16 +1111,20 @@ def get_vetting_stacks(request, resume_id):
     except models.Resume.DoesNotExist:
         return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    position = resume.applied_position.name if resume.applied_position else ''
-    stacks = stacks_for_position(position)
     progress = _get_or_create_vetting_progress(resume)
+    stacks, service_taxonomy, uses_db = taxonomy.get_stacks_for_resume(resume)
+    service = resume.applied_position
 
     return Response({
-        'position': position,
+        'position': service.name if service else '',
+        'service': service_taxonomy,
         'stacks': stacks,
+        'uses_db_taxonomy': uses_db,
         'min_technologies_to_pass': MIN_TECHNOLOGIES_TO_PASS,
+        'advancement_rule': 'Pass all required skills in the selected stack.',
         'selected_stack_slug': progress.selected_stack_slug,
         'selected_stack_name': progress.selected_stack_name,
+        'selected_stack_id': str(progress.selected_stack_id) if progress.selected_stack_id else None,
     })
 
 
@@ -1037,17 +1145,29 @@ def vetting_progress(request, resume_id):
 
     if request.method == 'POST':
         stack_slug = (request.data.get('stack_slug') or '').strip()
-        if not stack_slug:
-            return Response({'error': 'stack_slug is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        stack_id = (request.data.get('stack_id') or '').strip()
+        if not stack_slug and not stack_id:
+            return Response({'error': 'stack_slug or stack_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        position = progress.position_name or (resume.applied_position.name if resume.applied_position else '')
-        stack = next((s for s in stacks_for_position(position) if s['slug'] == stack_slug), None)
-        if not stack:
-            return Response({'error': 'Unknown stack for this position.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        progress.selected_stack_slug = stack_slug
-        progress.selected_stack_name = stack['name']
-        progress.save(update_fields=['selected_stack_slug', 'selected_stack_name', 'updated_at'])
+        stack_obj = None
+        if stack_id:
+            stack_obj = models.VettingStack.objects.filter(id=stack_id).first()
+        if not stack_obj and stack_slug:
+            stack_obj = models.VettingStack.objects.filter(slug=stack_slug).first()
+        if not stack_obj:
+            stacks, _, _ = taxonomy.get_stacks_for_resume(resume)
+            legacy = next((s for s in stacks if s['slug'] == stack_slug), None)
+            if not legacy:
+                return Response({'error': 'Unknown stack for this position.'}, status=status.HTTP_400_BAD_REQUEST)
+            progress.selected_stack_slug = legacy['slug']
+            progress.selected_stack_name = legacy['name']
+            progress.selected_stack = None
+            progress.save(update_fields=['selected_stack_slug', 'selected_stack_name', 'selected_stack', 'updated_at'])
+        else:
+            progress.selected_stack = stack_obj
+            progress.selected_stack_slug = stack_obj.slug
+            progress.selected_stack_name = stack_obj.name
+            progress.save(update_fields=['selected_stack', 'selected_stack_slug', 'selected_stack_name', 'updated_at'])
 
         for stage in ('theoretical_test', 'practical_test'):
             record, _ = models.VettingPipelineRecord.objects.get_or_create(resume=resume, stage=stage)
@@ -1055,29 +1175,36 @@ def vetting_progress(request, resume_id):
                 record.status = 'in_progress'
                 record.save(update_fields=['status', 'updated_at'])
 
-    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
-    theory_passed = _count_technology_passes(progress.technology_results, 'theoretical')
-    practical_passed = _count_technology_passes(progress.technology_results, 'practical')
-    full_passed = _count_full_stack_passes(progress.technology_results, required)
+    stack = taxonomy.resolve_stack(progress, resume)
+    skills = taxonomy.get_stack_skills(stack, progress, resume)
+    results = progress.technology_results or {}
+    theory_passed = taxonomy.count_passes_by_kind(skills, results, 'theoretical', required_only=True)
+    practical_passed = taxonomy.count_passes_by_kind(skills, results, 'practical', required_only=True)
+    required_count = sum(1 for s in skills if s.get('is_required', True))
 
     return Response({
         'position': progress.position_name,
         'selected_stack_slug': progress.selected_stack_slug,
         'selected_stack_name': progress.selected_stack_name,
-        'required_technologies': required,
-        'min_technologies_to_pass': MIN_TECHNOLOGIES_TO_PASS,
+        'selected_stack_id': str(progress.selected_stack_id) if progress.selected_stack_id else None,
+        'skills': skills,
+        'required_technologies': [s['name'] for s in skills if s.get('is_required', True)],
+        'optional_technologies': [s['name'] for s in skills if not s.get('is_required', True)],
+        'min_technologies_to_pass': required_count or MIN_TECHNOLOGIES_TO_PASS,
+        'advancement_rule': 'Pass all required skills in the selected stack.',
         'technology_results': progress.technology_results,
         'verified_technologies': progress.verified_technologies,
+        'certificates': taxonomy.serialize_certificates(resume),
         'counts': {
             'theoretical_passed': theory_passed,
             'practical_passed': practical_passed,
-            'fully_passed': full_passed,
-            'theoretical_remaining': max(0, MIN_TECHNOLOGIES_TO_PASS - theory_passed),
-            'practical_remaining': max(0, MIN_TECHNOLOGIES_TO_PASS - practical_passed),
+            'required_skill_count': required_count,
+            'theoretical_remaining': max(0, required_count - theory_passed),
+            'practical_remaining': max(0, required_count - practical_passed),
         },
         'requirements_met': {
-            'theoretical': theory_passed >= MIN_TECHNOLOGIES_TO_PASS,
-            'practical': practical_passed >= MIN_TECHNOLOGIES_TO_PASS,
+            'theoretical': taxonomy.required_skills_met(skills, results, 'theoretical'),
+            'practical': taxonomy.required_skills_met(skills, results, 'practical'),
         },
     })
 
@@ -1100,14 +1227,15 @@ def report_vetting_tech_result(request, resume_id):
         return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     technology = (request.data.get('technology') or '').strip()
+    skill_id = (request.data.get('skill_id') or '').strip()
     test_kind = (request.data.get('test_kind') or '').strip().lower()
     passed = request.data.get('passed')
     score = request.data.get('score')
     submission_id = request.data.get('submission_id')
     test_id = request.data.get('test_id')
 
-    if not technology:
-        return Response({'error': 'technology is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not technology and not skill_id:
+        return Response({'error': 'technology or skill_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
     if test_kind not in ('theoretical', 'practical'):
         return Response({'error': "test_kind must be 'theoretical' or 'practical'."}, status=status.HTTP_400_BAD_REQUEST)
     if passed is None:
@@ -1117,15 +1245,17 @@ def report_vetting_tech_result(request, resume_id):
     if not progress.selected_stack_slug:
         return Response({'error': 'Select an assessment stack before submitting results.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    required = technologies_for_stack(progress.selected_stack_slug, progress.position_name)
-    if technology not in required:
+    stack = taxonomy.resolve_stack(progress, resume)
+    skill = taxonomy.find_skill_in_stack(stack, progress, resume, technology=technology, skill_id=skill_id)
+    if not skill:
         return Response(
-            {'error': f'{technology} is not part of your selected stack.'},
+            {'error': 'Skill is not part of your selected stack.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    technology = skill['name']
 
     if test_kind == 'practical':
-        theory_entry = (progress.technology_results or {}).get(technology, {}).get('theoretical') or {}
+        theory_entry = taxonomy._get_skill_result(progress.technology_results or {}, skill).get('theoretical') or {}
         if not theory_entry.get('passed'):
             return Response(
                 {'error': f'Pass the theoretical {technology} test before the practical challenge.'},
@@ -1133,15 +1263,13 @@ def report_vetting_tech_result(request, resume_id):
             )
 
     results = dict(progress.technology_results or {})
-    tech_entry = dict(results.get(technology) or {})
-    tech_entry[test_kind] = {
+    results = taxonomy._set_skill_result(results, skill, test_kind, {
         'passed': bool(passed),
         'score': score,
         'submission_id': str(submission_id) if submission_id else None,
         'test_id': str(test_id) if test_id else None,
         'recorded_at': timezone.now().isoformat(),
-    }
-    results[technology] = tech_entry
+    })
     progress.technology_results = results
     progress.save(update_fields=['technology_results', 'updated_at'])
 
@@ -1159,19 +1287,28 @@ def report_vetting_tech_result(request, resume_id):
             'test_kind': test_kind,
             'passed': False,
             'requirements_met': {
-                'theoretical': _count_technology_passes(progress.technology_results, 'theoretical')
-                >= MIN_TECHNOLOGIES_TO_PASS,
-                'practical': _count_technology_passes(progress.technology_results, 'practical')
-                >= MIN_TECHNOLOGIES_TO_PASS,
+                'theoretical': taxonomy.required_skills_met(
+                    taxonomy.get_stack_skills(stack, progress, resume),
+                    progress.technology_results or {},
+                    'theoretical',
+                ),
+                'practical': taxonomy.required_skills_met(
+                    taxonomy.get_stack_skills(stack, progress, resume),
+                    progress.technology_results or {},
+                    'practical',
+                ),
             },
         })
 
     advanced_stages = _maybe_advance_vetting_stages(resume, progress)
-    theory_count = _count_technology_passes(progress.technology_results, 'theoretical')
-    practical_count = _count_technology_passes(progress.technology_results, 'practical')
+    skills = taxonomy.get_stack_skills(stack, progress, resume)
+    results = progress.technology_results or {}
+    theory_count = taxonomy.count_passes_by_kind(skills, results, 'theoretical', required_only=True)
+    practical_count = taxonomy.count_passes_by_kind(skills, results, 'practical', required_only=True)
 
     return Response({
         'recorded': technology,
+        'skill_id': skill.get('id'),
         'test_kind': test_kind,
         'passed': True,
         'advanced_stages': advanced_stages or [],
@@ -1180,10 +1317,11 @@ def report_vetting_tech_result(request, resume_id):
             'practical_passed': practical_count,
         },
         'requirements_met': {
-            'theoretical': theory_count >= MIN_TECHNOLOGIES_TO_PASS,
-            'practical': practical_count >= MIN_TECHNOLOGIES_TO_PASS,
+            'theoretical': taxonomy.required_skills_met(skills, results, 'theoretical'),
+            'practical': taxonomy.required_skills_met(skills, results, 'practical'),
         },
         'verified_technologies': progress.verified_technologies,
+        'certificates': taxonomy.serialize_certificates(resume),
     })
 
 
@@ -2012,19 +2150,12 @@ class ApplicationOnHoldViewSet(viewsets.ModelViewSet):
         # Format hold_until date as "July 20, 2023"
         hold_until_date = hold_until.strftime("%B %d, %Y") if hold_until else "a later date"
 
-        # Construct email content dynamically
-        email_subject = "Application Not Accepted"
-        email_content = (
-            f"Dear Applicant,\n\n"
-            f"Your application for the position '{position}' has not been accepted.\n"
-        )
-
-        if rejection_reason:  # Add reason only if provided
-            email_content += f"Reason: {rejection_reason}\n"
-
-        email_content += f"You may reapply after {hold_until_date}.\n\nBest regards,\nRecruitment Team"
-
-        # Send email notification
-        send_email(email, email_subject, email_content)
+        if application_on_hold.resume and hold_until:
+            _safe_send_application_hold_email(
+                application_on_hold.resume,
+                hold_until,
+                context='admin',
+                reason=rejection_reason,
+            )
 
         

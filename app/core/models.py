@@ -602,10 +602,18 @@ class ScreeningResult(models.Model):
 
 class ScreeningConfig(models.Model):
     passing_score_threshold = models.DecimalField(max_digits=5, decimal_places=2, default=70.0)
+    disable_application_holds = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, automatic application holds are not created or enforced '
+            '(useful for local/testing). Existing holds can still be deleted in admin.'
+        ),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Passing Score Threshold: {self.passing_score_threshold}"
+        holds = 'holds OFF' if self.disable_application_holds else 'holds ON'
+        return f"Threshold {self.passing_score_threshold}% · {holds}"
 
 
 class Technology(models.Model):
@@ -615,14 +623,89 @@ class Technology(models.Model):
     def __str__(self):
         return self.name
 
+
+class VettingSkill(models.Model):
+    """Canonical skill used for tests, stacks, marketplace search, and certificates."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(max_length=100, unique=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    technology = models.OneToOneField(
+        Technology, on_delete=models.SET_NULL, null=True, blank=True, related_name='vetting_skill',
+    )
+    theoretical_test_id = models.UUIDField(null=True, blank=True)
+    practical_test_id = models.UUIDField(null=True, blank=True)
+    content_version = models.CharField(max_length=20, default='1.0')
+    content_owner = models.CharField(max_length=255, blank=True)
+    review_practicals = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class VettingStack(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(max_length=100, unique=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+
+
+class StackSkill(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    stack = models.ForeignKey(VettingStack, on_delete=models.CASCADE, related_name='stack_skills')
+    skill = models.ForeignKey(VettingSkill, on_delete=models.CASCADE, related_name='stack_memberships')
+    is_required = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = [['stack', 'skill']]
+        ordering = ['sort_order', 'skill__name']
+
+    def __str__(self):
+        req = 'required' if self.is_required else 'optional'
+        return f'{self.stack.name} — {self.skill.name} ({req})'
+
+
+class ServiceVettingStack(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service = models.ForeignKey('Services', on_delete=models.CASCADE, related_name='available_stacks')
+    stack = models.ForeignKey(VettingStack, on_delete=models.CASCADE, related_name='service_links')
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [['service', 'stack']]
+
+    def __str__(self):
+        return f'{self.service.name} → {self.stack.name}'
+
+
 class Services(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=100, blank=True)
+    hireable_role_label = models.CharField(
+        max_length=255, blank=True,
+        help_text='Display role e.g. Frontend Developer (falls back to name)',
+    )
+    specialization_tags = models.JSONField(
+        default=list, blank=True,
+        help_text='Tags e.g. landing-pages, web-apps',
+    )
     description = models.TextField(blank=True , null=True)
     field = models.ForeignKey('Field',on_delete=models.SET_NULL , null=True )
     technologies = models.ManyToManyField(Technology, related_name='services')
     def __str__(self):
-        return self.name
+        return self.hireable_role_label or self.name
+
+    @property
+    def display_name(self):
+        return self.hireable_role_label or self.name
 
 class Field(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -739,10 +822,13 @@ class VettingPipelineRecord(models.Model):
 
 
 class CandidateVettingProgress(models.Model):
-    """Tracks stack choice and per-technology theory/practical results during vetting."""
+    """Tracks stack choice and per-skill theory/practical results during vetting."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     resume = models.OneToOneField('Resume', on_delete=models.CASCADE, related_name='vetting_progress')
     position_name = models.CharField(max_length=255, blank=True)
+    selected_stack = models.ForeignKey(
+        VettingStack, on_delete=models.SET_NULL, null=True, blank=True, related_name='candidate_selections',
+    )
     selected_stack_slug = models.CharField(max_length=100, blank=True)
     selected_stack_name = models.CharField(max_length=255, blank=True)
     technology_results = models.JSONField(default=dict, blank=True)
@@ -751,4 +837,29 @@ class CandidateVettingProgress(models.Model):
 
     def __str__(self):
         return f"Vetting progress for {self.resume.email}"
+
+
+class SkillCertificate(models.Model):
+    """Verified skill credential after passing theory + practical for a stack skill."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.ForeignKey('Resume', on_delete=models.CASCADE, related_name='skill_certificates')
+    freelancer = models.ForeignKey(
+        'Freelancer', on_delete=models.SET_NULL, null=True, blank=True, related_name='skill_certificates',
+    )
+    skill = models.ForeignKey(VettingSkill, on_delete=models.CASCADE, related_name='certificates')
+    stack = models.ForeignKey(VettingStack, on_delete=models.SET_NULL, null=True, blank=True)
+    theoretical_score = models.FloatField(null=True, blank=True)
+    practical_score = models.FloatField(null=True, blank=True)
+    theoretical_submission_id = models.UUIDField(null=True, blank=True)
+    practical_submission_id = models.UUIDField(null=True, blank=True)
+    verified_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    content_version = models.CharField(max_length=20, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = [['resume', 'skill', 'stack']]
+
+    def __str__(self):
+        return f'{self.skill.name} — {self.resume.email}'
 

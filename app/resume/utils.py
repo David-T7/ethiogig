@@ -156,29 +156,24 @@ def create_freelancer_from_resume(resume):
     assessment.save()
 
     try:
-        progress = models.CandidateVettingProgress.objects.filter(resume=resume).first()
-        if progress and progress.verified_technologies:
+        certs = models.SkillCertificate.objects.filter(resume=resume, is_active=True)
+        if certs.exists():
             existing = json.loads(freelancer.skills) if freelancer.skills else []
-            for tech in progress.verified_technologies:
-                name = tech.get('name')
-                if not name:
-                    continue
-                existing.extend([
-                    {
-                        'name': name,
-                        'type': 'theoretical',
-                        'score': tech.get('theoretical_score'),
-                        'stack': progress.selected_stack_slug,
-                    },
-                    {
-                        'name': name,
-                        'type': 'practical',
-                        'score': tech.get('practical_score'),
-                        'stack': progress.selected_stack_slug,
-                    },
-                ])
+            for cert in certs.select_related('skill', 'stack'):
+                existing.append({
+                    'skill': cert.skill.name,
+                    'skill_id': str(cert.skill_id),
+                    'verified': True,
+                    'theoretical_score': cert.theoretical_score,
+                    'practical_score': cert.practical_score,
+                    'verified_at': cert.verified_at.isoformat(),
+                    'expires_at': cert.expires_at.isoformat(),
+                    'stack': cert.stack.slug if cert.stack else None,
+                    'content_version': cert.content_version,
+                })
             freelancer.skills = json.dumps(existing)
             freelancer.save(update_fields=['skills'])
+            certs.update(freelancer=freelancer)
     except Exception:
         pass
 

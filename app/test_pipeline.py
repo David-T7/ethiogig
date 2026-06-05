@@ -163,7 +163,8 @@ def simulate_full_pipeline(resume, password=None):
         fail(f"pipeline-status HTTP {code}")
         return False
 
-    by_stage = {r["stage"]: r for r in records}
+    stages = records.get("stages", records) if isinstance(records, dict) else records
+    by_stage = {r["stage"]: r for r in stages}
     print("\n  Final pipeline-status:")
     for key in FRONTEND_STAGES:
         rec = by_stage.get(key)

@@ -19,7 +19,7 @@ class ScreeningResultSerializer(serializers.ModelSerializer):
 class ScreeningConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ScreeningConfig
-        fields = ['passing_score_threshold', 'updated_at']
+        fields = ['passing_score_threshold', 'disable_application_holds', 'updated_at']
         read_only_fields = ['updated_at']
 
 class FieldSerializer(serializers.ModelSerializer):    
