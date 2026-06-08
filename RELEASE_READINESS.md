@@ -118,6 +118,8 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] `skill_id` on `PracticalTest`; `GET /api/practical-tests/by-skill/<uuid>/`
 - [x] `skill_id` in serializer; `ALLOWED_HOSTS` for Docker link command
 - [x] Story-style seeds + Monaco editor on frontend
+- [x] **Judge0 execution engine** — `TestCase` model (migration `0018`), `judge0/judge0:1.13.1` in `docker-compose.yml`, `submit_answer` runs batch test cases + passes results to Gemini, `run-tests` dry-run endpoint, seeds include 2 visible + 1 hidden test case per challenge
+- [ ] Frontend: test case results panel in `CodingTestPage.js` (see `Django Test/CLAUDE.md` § Judge0)
 
 ### Surveillance (8003)
 
