@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-06-02  
+**Last updated:** 2026-06-10  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 ---
@@ -118,8 +118,11 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] `skill_id` on `PracticalTest`; `GET /api/practical-tests/by-skill/<uuid>/`
 - [x] `skill_id` in serializer; `ALLOWED_HOSTS` for Docker link command
 - [x] Story-style seeds + Monaco editor on frontend
-- [x] **Judge0 execution engine** — `TestCase` model (migration `0018`), `judge0/judge0:1.13.1` in `docker-compose.yml`, `submit_answer` runs batch test cases + passes results to Gemini, `run-tests` dry-run endpoint, seeds include 2 visible + 1 hidden test case per challenge
-- [ ] Frontend: test case results panel in `CodingTestPage.js` (see `Django Test/CLAUDE.md` § Judge0)
+- [x] **Execution engine** — `TestCase` model (migration `0018`), Node.js subprocess replaces Judge0 (WSL2 cgroups v1 incompatibility), `submit_answer` runs all test cases + passes results to Gemini, `run-tests` dry-run endpoint
+- [x] `TestCase.description` field (migration `0019`); catalog + existing DB rows have descriptions
+- [x] `visible_test_cases` in `PracticalTestQuestionSerializer` (id + description per non-hidden case)
+- [x] Frontend: individual test case cards (`CodingTestPage.js`) — description + ▶ play button + ✓/✗ status; Submit gated on all visible cases passing
+- [ ] Per-test-case individual execution (▶ button currently runs all; needs single-case endpoint)
 
 ### Surveillance (8003)
 
