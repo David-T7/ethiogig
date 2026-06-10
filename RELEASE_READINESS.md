@@ -122,7 +122,10 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] `TestCase.description` field (migration `0019`); catalog + existing DB rows have descriptions
 - [x] `visible_test_cases` in `PracticalTestQuestionSerializer` (id + description per non-hidden case)
 - [x] Frontend: individual test case cards (`CodingTestPage.js`) — description + ▶ play button + ✓/✗ status; Submit gated on all visible cases passing
-- [ ] Per-test-case individual execution (▶ button currently runs all; needs single-case endpoint)
+- [x] Per-test-case individual execution (`run-test-case` endpoint; ▶ button runs only that card)
+- [x] Graceful Gemini quota handling — 3-retry backoff; fallback score from test cases; follow-ups skipped silently
+- [x] Technology-specific challenges per skill (HTML, CSS, React, Node.js, TypeScript)
+- [ ] HTML/CSS native execution via Judge0 (currently JS string-output harnesses via Node.js; requires Judge0 WSL2/cgroups-v1 fix)
 
 ### Surveillance (8003)
 
