@@ -30,9 +30,7 @@ FRONTEND_STAGES = [
     "ai_screening",
     "kyc",
     "theoretical_test",
-    "practical_test",
-    "resume_check",
-    "full_assessment",
+    "interview",
 ]
 
 
@@ -149,7 +147,7 @@ def simulate_full_pipeline(resume, password=None):
             return False
         ok("ai_screening → passed (simulated)")
 
-    stages_to_report = ["kyc", "theoretical_test", "practical_test", "resume_check", "full_assessment"]
+    stages_to_report = ["kyc", "theoretical_test", "interview"]
     for stage in stages_to_report:
         code, body = api_report_stage(resume.id, token, stage, passed=True, score=88)
         if code != 200:

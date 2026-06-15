@@ -795,6 +795,7 @@ class VettingPipelineRecord(models.Model):
         ('practical_test', 'Practical Skills Test'),
         ('resume_check', 'Resume Check'),
         ('full_assessment', 'Full Assessment'),
+        ('interview', 'Interview'),
     ]
     STATUS_CHOICES = [
         ('pending', 'Pending'),

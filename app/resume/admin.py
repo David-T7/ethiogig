@@ -7,9 +7,7 @@ PIPELINE_STAGES = [
     'ai_screening',
     'kyc',
     'theoretical_test',
-    'practical_test',
-    'resume_check',
-    'full_assessment',
+    'interview',
 ]
 
 

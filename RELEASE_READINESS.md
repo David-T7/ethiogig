@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-06-10  
+**Last updated:** 2026-06-15  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 ---
@@ -104,6 +104,12 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] Camera check preserves `technology`, `skill_id`, `position` query params
 - [x] Hold UX: banner on status/hub; camera check blocked; no snapshot text in hold modal
 - [x] `applicationHold.js` + resend hold email button
+- [x] **Anti-cheat: fullscreen enforcement** — test enters fullscreen on start; exit = focus violation (same escalation ladder)
+- [x] **Anti-cheat: copy/paste/right-click blocked** during active test
+- [x] **Anti-cheat: devtools keyboard shortcuts blocked** (F12, Ctrl+Shift+I/J/U, PrintScreen, etc.)
+- [x] **Anti-cheat: burst snapshot on focus violation** — 3 frames at 0 / 1.5 / 3 s via `triggerBurstCapture`
+- [x] **Snapshot efficiency** — baseline 15 s interval (was 10 s), 320×240 @ JPEG 0.75 (~9× less data than original)
+- [x] Fixed `candidateId` TDZ crash in `TestPage` (moved `useCandidateAuth` above `reportFocusViolation`)
 - [ ] Remove JWT from query strings (P1 security)
 
 ### Theoretical tests (`ethiogig-testing` — 8001)
@@ -111,7 +117,9 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] `skill_id` on `SkillTest`; `GET /api/theoretical-tests/by-skill/<uuid>/`
 - [x] `skill_id` in serializer; `ALLOWED_HOSTS` for Docker link command
 - [x] `seed_vetting_tests` management command
-- [ ] Richer question banks (optional)
+- [x] `SkillTest.sample_size` (migration `0010`) — random question sampling per session
+- [x] Question order + MCQ option order shuffled on every session (backend, no frontend change needed)
+- [x] 20 curated MCQ questions per skill (HTML, CSS, JavaScript, React, Node.js, PostgreSQL); `sample_size = 15`
 
 ### Practical tests (`ethio_gig_code_testing` — 8002)
 
@@ -125,6 +133,8 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] Per-test-case individual execution (`run-test-case` endpoint; ▶ button runs only that card)
 - [x] Graceful Gemini quota handling — 3-retry backoff; fallback score from test cases; follow-ups skipped silently
 - [x] Technology-specific challenges per skill (HTML, CSS, React, Node.js, TypeScript)
+- [x] **Code modification challenge** — `CodeModificationChallenge` + `CodeModificationSubmission` models (migration `0020`); Gemini generates a live extension requirement from candidate's exact code; `modification-challenge` GET + `submit-modification` POST endpoints; `finalize_submission` weighted scoring (code×0.2 + MCQ×0.3 + mod×0.5)
+- [ ] **Frontend: modification challenge UI** — after MCQ follow-ups, show requirement text + 10-min countdown timer with pre-loaded editor; call `submit-modification` on submit; show pass/fail result
 - [ ] HTML/CSS native execution via Judge0 (currently JS string-output harnesses via Node.js; requires Judge0 WSL2/cgroups-v1 fix)
 
 ### Surveillance (8003)

@@ -98,9 +98,7 @@ PIPELINE_STAGES = [
     'ai_screening',
     'kyc',
     'theoretical_test',
-    'practical_test',
-    'resume_check',
-    'full_assessment',
+    'interview',
 ]
 
 
@@ -360,6 +358,19 @@ def trigger_resume_check_stage(resume):
     send_email(resume.email, "Application Under Review", html_content)
 
 
+def trigger_interview_stage(resume):
+    if not _invite_pipeline_stage(resume, 'interview', 'invited'):
+        return
+    html_content = f"""
+    <html><body>
+    <p>Congratulations! You have passed the theoretical skills assessment for <strong>{resume.applied_position.name}</strong>.</p>
+    <p>Our team will reach out to you shortly to schedule your interview.</p>
+    <p>Please ensure your contact details are up to date.</p>
+    </body></html>
+    """
+    send_email(resume.email, "Interview Invitation — EthioGig", html_content)
+
+
 def advance_pipeline(resume, completed_stage):
     try:
         idx = PIPELINE_STAGES.index(completed_stage)
@@ -374,10 +385,8 @@ def advance_pipeline(resume, completed_stage):
         trigger_kyc_stage(resume)
     elif next_stage == 'theoretical_test':
         trigger_theoretical_test(resume)
-    elif next_stage == 'practical_test':
-        trigger_practical_test(resume)
-    elif next_stage == 'resume_check':
-        trigger_resume_check_stage(resume)
+    elif next_stage == 'interview':
+        trigger_interview_stage(resume)
 
 
 def _hold_days_for_score(score):
@@ -1060,9 +1069,7 @@ def _maybe_advance_vetting_stages(resume, progress):
 
     results = progress.technology_results or {}
     theory_met = taxonomy.required_skills_met(skills, results, 'theoretical')
-    practical_met = taxonomy.required_skills_met(skills, results, 'practical')
     theory_count = taxonomy.count_passes_by_kind(skills, results, 'theoretical', required_only=True)
-    practical_count = taxonomy.count_passes_by_kind(skills, results, 'practical', required_only=True)
     advanced = []
 
     if theory_met:
@@ -1078,20 +1085,6 @@ def _maybe_advance_vetting_stages(resume, progress):
             record.save()
             advance_pipeline(resume, 'theoretical_test')
             advanced.append('theoretical_test')
-
-    if practical_met:
-        record, _ = models.VettingPipelineRecord.objects.get_or_create(
-            resume=resume, stage='practical_test',
-        )
-        if record.status != 'passed':
-            record.status = 'passed'
-            record.notes = (
-                f'Passed all required practical skills ({practical_count}). '
-                f'Stack: {progress.selected_stack_name}.'
-            )
-            record.save()
-            advance_pipeline(resume, 'practical_test')
-            advanced.append('practical_test')
 
     taxonomy.sync_verified_from_results(progress, stack, resume)
     return advanced
@@ -1169,7 +1162,7 @@ def vetting_progress(request, resume_id):
             progress.selected_stack_name = stack_obj.name
             progress.save(update_fields=['selected_stack', 'selected_stack_slug', 'selected_stack_name', 'updated_at'])
 
-        for stage in ('theoretical_test', 'practical_test'):
+        for stage in ('theoretical_test',):
             record, _ = models.VettingPipelineRecord.objects.get_or_create(resume=resume, stage=stage)
             if record.status in ('pending', 'invited'):
                 record.status = 'in_progress'
