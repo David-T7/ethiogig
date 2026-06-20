@@ -58,6 +58,10 @@ This approach allows each component to run in its isolated environment, simplify
 
 To execute this project locally, you must have **Docker** and **Docker Compose** installed.
 
+**Detailed vetting MVP checklist:** see [`RELEASE_READINESS.md`](./RELEASE_READINESS.md) (taxonomy, smoke tests, admin bypass toggles for local QA).
+
+**Theoretical-only local stack (June 2026):** main backend (8000) + theoretical tests (8001) + React (3000). Enable admin **Screening configs** bypass toggles to skip AI screening, KYC, and surveillance during QA.
+
 ### Full Installation Guide (Docker)
 
 Execute the following steps in your terminal to clone, configure, build, and start all services:

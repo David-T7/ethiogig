@@ -609,11 +609,40 @@ class ScreeningConfig(models.Model):
             '(useful for local/testing). Existing holds can still be deleted in admin.'
         ),
     )
+    skip_ai_screening_for_testing = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, email verification auto-passes AI resume screening and advances '
+            'the pipeline without calling Gemini (local/testing only).'
+        ),
+    )
+    skip_kyc_for_testing = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, candidates skip identity verification and are invited straight '
+            'to the theoretical skills test after AI screening (local/testing only).'
+        ),
+    )
+    disable_surveillance_for_testing = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, candidates skip the camera pre-check and in-test face proctoring '
+            'for skills tests (local/testing only).'
+        ),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         holds = 'holds OFF' if self.disable_application_holds else 'holds ON'
-        return f"Threshold {self.passing_score_threshold}% · {holds}"
+        flags = []
+        if self.skip_ai_screening_for_testing:
+            flags.append('AI screening bypass')
+        if self.skip_kyc_for_testing:
+            flags.append('KYC bypass')
+        if self.disable_surveillance_for_testing:
+            flags.append('surveillance OFF')
+        suffix = f" · {', '.join(flags)}" if flags else ''
+        return f"Threshold {self.passing_score_threshold}% · {holds}{suffix}"
 
 
 class Technology(models.Model):

@@ -1,7 +1,9 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-06-15  
+**Last updated:** 2026-06-20  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
+
+**Current focus (June 2026):** Theoretical test MVP smoke path. Use admin **Screening configs** bypass toggles for local QA without Gemini, KYC (8005), or surveillance (8003). Full pipeline (practical, KYC, proctoring) remains implemented but deferred for sign-off.
 
 ---
 
@@ -66,9 +68,25 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 
 **Testing without holds:** Admin → **Screening configs** → check **Disable application holds**. Skips creating and enforcing holds (local QA). Clear existing holds via Resume admin actions.
 
+### Admin testing bypasses (`ScreeningConfig` — migration `0110`)
+
+All default **OFF**. Enable only in local/staging QA — **never in production**.
+
+| Toggle | Effect |
+|--------|--------|
+| **Skip AI screening for testing** | Email verify auto-passes AI screening (no Gemini call). |
+| **Skip KYC for testing** | Auto-passes KYC and invites **theoretical test** (no 8005). |
+| **Disable surveillance for testing** | Frontend skips camera pre-check and in-test face proctoring (no 8003 required). |
+
+**Pipeline status API** exposes flags as `testing_policy`: `{ skip_ai_screening, skip_kyc, disable_surveillance }` alongside `hold_policy`.
+
+**Typical theoretical-only local stack:** 8000 + 8001 + React 3000 (8003 optional when surveillance bypass is on).
+
 ---
 
 ## End-to-end smoke test (one candidate)
+
+### Full pipeline (production-like)
 
 - [ ] Apply → verify email → AI screening passes (or admin sets `ai_screening` passed).
 - [ ] `/application/track` → sign in with application password.
@@ -81,6 +99,35 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [ ] On hold: blocked at status/hub/camera check (not mid-test with snapshot wording).
 - [ ] Admin: taxonomy synced; test IDs linked; holds clearable.
 
+### Theoretical-only (current MVP QA — bypass toggles ON)
+
+- [ ] Admin: enable all three testing bypasses + optionally disable holds.
+- [ ] Start Docker: main (8000), theoretical (8001), React (3000).
+- [ ] Run taxonomy sync + seed (see Taxonomy setup; steps 1–2 and link command sufficient for theory).
+- [ ] Apply with **new email** → verify email → pipeline shows **theoretical test invited** (no KYC step).
+- [ ] `/application/track` → `/application/status` → **Choose stack & tests**.
+- [ ] Start a theory skill → lands on MCQ test **without** camera check when surveillance bypass is on.
+- [ ] Complete test → hub pass/fail banner → `vetting-tech-result` recorded.
+- [ ] Pass all **required** skills in stack → pipeline advances; certificates on status page.
+
+**Reset applicant data for a fresh run** (main DB, from Django container):
+
+```bash
+docker exec djangoproject-app-1 python manage.py shell -c "
+from core.models import *
+SkillCertificate.objects.all().delete()
+VettingPipelineRecord.objects.all().delete()
+CandidateVettingProgress.objects.all().delete()
+ResumeCheck.objects.all().delete()
+ApplicationOnHold.objects.all().delete()
+ScreeningResult.objects.all().delete()
+Resume.objects.all().delete()
+print('Applicant/vetting data cleared.')
+"
+```
+
+Optional: clear theoretical submissions (`8001`) and surveillance profiles (`8003`) if retesting same browser session.
+
 ---
 
 ## Per-repository checklist
@@ -92,9 +139,11 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] `sync_vetting_taxonomy`, `link_vetting_test_ids` management commands
 - [x] `vetting-stacks`, `vetting-progress`, `vetting-tech-result` APIs
 - [x] `hold_policy.py` + `ScreeningConfig.disable_application_holds`
+- [x] `testing_policy.py` + `ScreeningConfig` bypass toggles (AI screening, KYC, surveillance) — migration `0110`
+- [x] `testing_policy` in pipeline-status API; unit tests in `resume/tests/test_testing_policy.py`
 - [x] Hold notification email + `resend-hold-notification`
-- [x] Migrations `0106`–`0108`
-- [x] Admin: pipeline inlines, holds, screening config toggle
+- [x] Migrations `0106`–`0110`
+- [x] Admin: pipeline inlines, holds, screening config toggles
 - [ ] One-time action tokens, rate limits (see `CLAUDE.md`)
 
 ### Frontend (`ethiogurus_frontend` — 3000)
@@ -110,6 +159,7 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] **Anti-cheat: burst snapshot on focus violation** — 3 frames at 0 / 1.5 / 3 s via `triggerBurstCapture`
 - [x] **Snapshot efficiency** — baseline 15 s interval (was 10 s), 320×240 @ JPEG 0.75 (~9× less data than original)
 - [x] Fixed `candidateId` TDZ crash in `TestPage` (moved `useCandidateAuth` above `reportFocusViolation`)
+- [x] **Testing bypass UX** — reads `testing_policy` from pipeline-status; skips camera check + surveillance when `disable_surveillance`
 - [ ] Remove JWT from query strings (P1 security)
 
 ### Theoretical tests (`ethiogig-testing` — 8001)
@@ -133,8 +183,6 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 - [x] Per-test-case individual execution (`run-test-case` endpoint; ▶ button runs only that card)
 - [x] Graceful Gemini quota handling — 3-retry backoff; fallback score from test cases; follow-ups skipped silently
 - [x] Technology-specific challenges per skill (HTML, CSS, React, Node.js, TypeScript)
-- [x] **Code modification challenge** — `CodeModificationChallenge` + `CodeModificationSubmission` models (migration `0020`); Gemini generates a live extension requirement from candidate's exact code; `modification-challenge` GET + `submit-modification` POST endpoints; `finalize_submission` weighted scoring (code×0.2 + MCQ×0.3 + mod×0.5)
-- [ ] **Frontend: modification challenge UI** — after MCQ follow-ups, show requirement text + 10-min countdown timer with pre-loaded editor; call `submit-modification` on submit; show pass/fail result
 - [ ] HTML/CSS native execution via Judge0 (currently JS string-output harnesses via Node.js; requires Judge0 WSL2/cgroups-v1 fix)
 
 ### Surveillance (8003)
@@ -155,6 +203,7 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 | Task | Where |
 |------|--------|
 | **Disable holds for testing** | Admin → **Screening configs** → **Disable application holds** |
+| **Skip AI / KYC / surveillance (QA)** | Admin → **Screening configs** → three bypass checkboxes |
 | Clear candidate holds | **Resumes** → action **Remove holds + reset on-hold stages** |
 | Delete hold rows only | **Application on holds** → delete selected |
 | Edit stage status | **Resumes** → **Vetting pipeline stages** inline |

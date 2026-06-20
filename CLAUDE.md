@@ -236,9 +236,24 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 | Pass **all required skills** per stack (not fixed count of 2) | Done |
 | `report_proctoring_violation` + hold emails + resend endpoint | Done |
 | `disable_application_holds` on ScreeningConfig (admin) | Done |
-| Admin: holds clear actions, Screening config, taxonomy models | Done |
-| Migrations `0106`–`0108` | Run on deploy |
+| **Testing bypasses** — skip AI screening / KYC / surveillance (`testing_policy.py`, migration `0110`) | Done |
+| Admin: holds clear actions, Screening config toggles, taxonomy models | Done |
+| Migrations `0106`–`0110` | Run on deploy |
 | Security: one-time tokens, rate limits | Planned |
+
+### Testing bypasses (local QA only)
+
+Admin → **Screening configs** (`core.models.ScreeningConfig`):
+
+| Field | Backend module | Effect |
+|-------|----------------|--------|
+| `skip_ai_screening_for_testing` | `resume/testing_policy.py` | Email verify → auto-pass AI screening (no Gemini) |
+| `skip_kyc_for_testing` | same | Auto-pass KYC → invite theoretical test |
+| `disable_surveillance_for_testing` | same + pipeline-status API | Frontend skips camera check / face proctoring |
+
+`GET /api/resumes/{id}/pipeline-status/` returns `testing_policy` alongside `hold_policy`.
+
+**Next session focus:** complete theoretical-only E2E smoke checklist in `RELEASE_READINESS.md` (bypass toggles ON, stacks 8000+8001+3000).
 
 ### Current `Services.name` values (2026-06-02)
 
@@ -250,6 +265,7 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 | Task | Location |
 |------|----------|
 | Disable holds (testing) | **Screening configs** → **Disable application holds** |
+| Skip AI / KYC / surveillance (QA) | **Screening configs** → bypass checkboxes |
 | Clear holds | **Resumes** → **Remove holds + reset on-hold stages** |
 | Edit stages | **Resumes** → **Vetting pipeline stages** inline |
 | Taxonomy | **Vetting stacks**, **Vetting skills**, **Services** (stack inline) |

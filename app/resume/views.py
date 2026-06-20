@@ -30,6 +30,11 @@ from .utils import extract_text_from_pdf, score_resume_with_gemini, send_resume_
 from .vetting_catalog import MIN_TECHNOLOGIES_TO_PASS
 from . import vetting_taxonomy_service as taxonomy
 from .hold_policy import application_holds_enabled, active_application_hold
+from .testing_policy import (
+    skip_kyc_for_testing,
+    skip_ai_screening_for_testing,
+    serialize_testing_policy,
+)
 
 from uuid import UUID
 
@@ -192,9 +197,52 @@ def _send_candidate_account_link_email(resume, subject, path, action_label):
     send_email(resume.email, subject, html_content)
 
 
+def _mark_testing_skip_stage(resume, stage):
+    models.VettingPipelineRecord.objects.update_or_create(
+        resume=resume,
+        stage=stage,
+        defaults={
+            'status': 'passed',
+            'score': 100,
+            'notes': 'Skipped for testing (admin ScreeningConfig).',
+        },
+    )
+
+
+def _invite_next_stage_after_screening(resume):
+    """After AI screening passes (or is bypassed), invite KYC or theoretical test."""
+    if skip_kyc_for_testing():
+        _mark_testing_skip_stage(resume, 'kyc')
+        if not pipeline_past_stage(resume, 'theoretical_test'):
+            trigger_theoretical_test(resume)
+    elif not pipeline_past_stage(resume, 'kyc'):
+        trigger_kyc_stage(resume)
+
+
 def send_resume_for_screening(resume):
-    resume_text = extract_text_from_pdf(resume.resume_file.path)
     applied_position = resume.applied_position
+
+    if skip_ai_screening_for_testing():
+        ScreeningResult.objects.create(
+            resume=resume,
+            score=100,
+            passed=True,
+            comments='AI screening skipped for testing (admin).',
+            position=applied_position,
+        )
+        models.VettingPipelineRecord.objects.update_or_create(
+            resume=resume,
+            stage='ai_screening',
+            defaults={
+                'status': 'passed',
+                'score': 100,
+                'notes': 'Skipped for testing (admin).',
+            },
+        )
+        _invite_next_stage_after_screening(resume)
+        return [100]
+
+    resume_text = extract_text_from_pdf(resume.resume_file.path)
     score_result = score_resume_with_gemini(resume_text, applied_position.name)
 
     screening_results = []
@@ -247,7 +295,7 @@ def send_resume_for_screening(resume):
             defaults={'status': 'passed', 'score': max(screening_results)},
         )
         if not pipeline_past_stage(resume, 'kyc'):
-            trigger_kyc_stage(resume)
+            _invite_next_stage_after_screening(resume)
 
     return screening_results
 
@@ -382,7 +430,11 @@ def advance_pipeline(resume, completed_stage):
 
     next_stage = PIPELINE_STAGES[idx + 1]
     if next_stage == 'kyc':
-        trigger_kyc_stage(resume)
+        if skip_kyc_for_testing():
+            _mark_testing_skip_stage(resume, 'kyc')
+            trigger_theoretical_test(resume)
+        else:
+            trigger_kyc_stage(resume)
     elif next_stage == 'theoretical_test':
         trigger_theoretical_test(resume)
     elif next_stage == 'interview':
@@ -969,6 +1021,7 @@ def get_pipeline_status(request, resume_id):
         'hold_policy': {
             'enforced': application_holds_enabled(),
         },
+        'testing_policy': serialize_testing_policy(),
     })
 
 

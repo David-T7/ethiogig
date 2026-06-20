@@ -118,8 +118,21 @@ class ApplicationOnHoldAdmin(admin.ModelAdmin):
 
 @admin.register(models.ScreeningConfig)
 class ScreeningConfigAdmin(admin.ModelAdmin):
-    list_display = ('passing_score_threshold', 'disable_application_holds', 'updated_at')
-    fields = ('passing_score_threshold', 'disable_application_holds')
+    list_display = (
+        'passing_score_threshold',
+        'disable_application_holds',
+        'skip_ai_screening_for_testing',
+        'skip_kyc_for_testing',
+        'disable_surveillance_for_testing',
+        'updated_at',
+    )
+    fields = (
+        'passing_score_threshold',
+        'disable_application_holds',
+        'skip_ai_screening_for_testing',
+        'skip_kyc_for_testing',
+        'disable_surveillance_for_testing',
+    )
     readonly_fields = ('updated_at',)
 
     def has_add_permission(self, request):
