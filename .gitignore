@@ -74,6 +74,16 @@ postgres_data/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
 
 # Flask stuff:
 instance/
@@ -135,6 +145,12 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+app/.env
+app/.env.*
 .venv
 env/
 venv/
