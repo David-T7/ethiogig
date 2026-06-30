@@ -121,6 +121,7 @@ class ScreeningConfigAdmin(admin.ModelAdmin):
     list_display = (
         'passing_score_threshold',
         'disable_application_holds',
+        'skip_email_verification_for_testing',
         'skip_ai_screening_for_testing',
         'skip_kyc_for_testing',
         'disable_surveillance_for_testing',
@@ -129,6 +130,7 @@ class ScreeningConfigAdmin(admin.ModelAdmin):
     fields = (
         'passing_score_threshold',
         'disable_application_holds',
+        'skip_email_verification_for_testing',
         'skip_ai_screening_for_testing',
         'skip_kyc_for_testing',
         'disable_surveillance_for_testing',

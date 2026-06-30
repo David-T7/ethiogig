@@ -73,6 +73,26 @@ class Freelancer(User):
     def __str__(self):
         return self.full_name
 
+
+class FreelancerBankAccount(models.Model):
+    ACCOUNT_TYPE_CHOICES = [
+        ('bank', 'Bank Transfer'),
+        ('mobile_money', 'Mobile Money (TeleBirr / CBE Birr)'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    freelancer = models.OneToOneField(
+        'Freelancer', on_delete=models.CASCADE, related_name='bank_account'
+    )
+    account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPE_CHOICES, default='bank')
+    account_number = models.CharField(max_length=50)
+    account_name = models.CharField(max_length=100)
+    bank_code = models.CharField(max_length=20, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.freelancer.full_name} — {self.account_type}"
+
     def delete(self, *args, **kwargs):
         if self.contracts.exists():
             raise ValidationError("Cannot delete freelancer who is involved in a project.")
@@ -362,27 +382,92 @@ class Escrow(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey('Contract', on_delete=models.CASCADE)
     milestone = models.OneToOneField('Milestone', on_delete=models.CASCADE , null=True , blank=True)
-    status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('Released', 'Released')])
+    status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('Released', 'Released'), ('Refunded', 'Refunded')])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deposit_confirmed = models.BooleanField(blank=True , default=False)
     amount = models.DecimalField(max_digits=10, decimal_places=2 , blank=True , null=True)
+    def _has_open_dispute(self):
+        qs = Dispute.objects.filter(contract=self.contract, status='open')
+        if self.milestone:
+            qs = qs.filter(milestone=self.milestone)
+        return qs.exists()
+
     def release(self):
-        if self.deposit_confirmed and self.contract.status == 'completed':
-            # Handle release logic
-            self.status = 'Released'
-            if self.milestone:
-                self.milestone.payment_status = 'in_progress'
-                self.milestone.save()
-            else:
-                self.contract.payment_status = 'in_progress'
-        elif (self.deposit_confirmed and self.contract.status == 'pending' and self.milestone.status == 'completed'): 
-            # Handle release logic
-            if self.milestone.status == 'completed':
-                self.status = 'Released'
-                self.milestone.payment_status = 'in_progress'
-                self.milestone.save()
+        if not self.deposit_confirmed or self.status == 'Released':
+            return
+
+        if self._has_open_dispute():
+            return  # frozen until dispute is resolved
+
+        ready = (
+            (self.milestone and self.milestone.status == 'completed') or
+            (not self.milestone and self.contract.status == 'completed')
+        )
+        if not ready:
+            return
+
+        self.status = 'Released'
+        self.save(update_fields=['status'])
+
+        if self.milestone:
+            self.milestone.payment_status = 'paid'
+            self.milestone.save(update_fields=['payment_status'])
+        else:
+            self.contract.payment_status = 'paid'
+            self.contract.save(update_fields=['payment_status'])
+
+        self._payout_to_freelancer()
+
+    def _payout_to_freelancer(self):
+        import logging
+        from project import chapa as chapa_client
+        logger = logging.getLogger(__name__)
+
+        freelancer = self.contract.freelancer
+        try:
+            bank = freelancer.bank_account
+        except Exception:
+            logger.warning('Escrow %s released but freelancer %s has no bank account on file.', self.id, freelancer.id)
+            return
+
+        reference = f'ethiogig-payout-{self.id}'
+        try:
+            chapa_client.transfer_to_bank(
+                amount=self.amount,
+                account_number=bank.account_number,
+                account_name=bank.account_name,
+                bank_code=bank.bank_code,
+                reference=reference,
+                beneficiary_name=freelancer.full_name,
+            )
+            logger.info('Chapa payout initiated for escrow %s → freelancer %s', self.id, freelancer.id)
+        except RuntimeError as exc:
+            logger.error('Chapa payout failed for escrow %s: %s', self.id, exc)
             
+    def refund(self):
+        """
+        Refund the escrow to the client. Only valid when funded and not yet released.
+        Calls Chapa refund API; on failure logs a warning but still marks as Refunded
+        so the manual refund can be tracked externally.
+        """
+        import logging
+        from project import chapa as chapa_client
+        logger = logging.getLogger(__name__)
+
+        if not self.deposit_confirmed or self.status != 'Pending':
+            return
+
+        tx_ref = f'ethiogig-escrow-{self.id}'
+        try:
+            chapa_client.refund_payment(tx_ref, amount=self.amount)
+            logger.info('Chapa refund initiated for escrow %s', self.id)
+        except RuntimeError as exc:
+            logger.error('Chapa refund failed for escrow %s: %s — mark for manual refund', self.id, exc)
+
+        self.status = 'Refunded'
+        self.save(update_fields=['status'])
+
     def __str__(self):
         return f"Escrow for {self.contract}"
 
@@ -612,8 +697,15 @@ class ScreeningConfig(models.Model):
     skip_ai_screening_for_testing = models.BooleanField(
         default=False,
         help_text=(
-            'When enabled, email verification auto-passes AI resume screening and advances '
+            'When enabled, verified applicants auto-pass AI resume screening and advance '
             'the pipeline without calling Gemini (local/testing only).'
+        ),
+    )
+    skip_email_verification_for_testing = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, new applications are marked email-verified immediately on submit '
+            'and screening starts without sending a verification link (local/testing only).'
         ),
     )
     skip_kyc_for_testing = models.BooleanField(
@@ -637,6 +729,8 @@ class ScreeningConfig(models.Model):
         flags = []
         if self.skip_ai_screening_for_testing:
             flags.append('AI screening bypass')
+        if self.skip_email_verification_for_testing:
+            flags.append('email verify bypass')
         if self.skip_kyc_for_testing:
             flags.append('KYC bypass')
         if self.disable_surveillance_for_testing:

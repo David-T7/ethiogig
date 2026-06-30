@@ -29,6 +29,7 @@ Copy `app/.env.example` → `app/.env` (git-ignored). Required secrets:
 | Variable | Purpose |
 |---|---|
 | `GEMINI_API_KEY` | AI resume screening (`score_resume_with_gemini`) — **never commit** |
+| `CHAPA_SECRET_KEY` | Chapa payment gateway (test key from dashboard.chapa.co) — **never commit** |
 | Email vars | Brevo/SMTP for verification and pipeline emails |
 
 `docker-compose.yml` references sibling services:
@@ -157,6 +158,25 @@ Helpers: `decode_candidate_action_token()`, `confirm_password_change`, `confirm_
 | Token refresh | `/api/user/token/refresh/` |
 | Assessment termination | `/api/assessment-termination/` |
 
+### Contract & Escrow endpoints
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/contracts/<id>/cancel/` | Client Bearer | Cancel contract; refunds funded escrows via Chapa |
+| POST | `/api/payments/escrow/<id>/initialize/` | Client Bearer | Start Chapa payment for escrow funding |
+| GET | `/api/payments/escrow/<id>/verify/` | Client Bearer | Verify Chapa payment; sets `deposit_confirmed=True` |
+| POST | `/api/payments/webhook/` | Public (Chapa) | Server-to-server Chapa callback; double-verifies before confirming |
+| GET/PUT | `/api/user/bank-account/` | Freelancer Bearer | Freelancer payout bank account details |
+
+### WebSocket endpoints
+
+| Route | Consumer | Purpose |
+|---|---|---|
+| `ws/chat/<chat_id>/?token=<jwt>` | `ChatConsumer` | Real-time per-chat messaging |
+| `ws/inbox/?token=<jwt>` | `InboxConsumer` | User-level push; fires when any chat receives a new message |
+
+**Channel layer:** Redis via `channels_redis` (`CHANNEL_LAYERS` in settings). Celery and WebSockets share the same Redis instance.
+
 ---
 
 ## Models (vetting)
@@ -168,6 +188,24 @@ Helpers: `decode_candidate_action_token()`, `confirm_password_change`, `confirm_
 - **`SkillCertificate`** — 365-day skill verification after theory + practical pass.
 - **`ApplicationOnHold`** — email + position + `hold_until`; enforced unless `ScreeningConfig.disable_application_holds`.
 - **`ScreeningResult`** — AI screening scores per position.
+
+## Models (contract & payment)
+
+- **`Escrow`** — one per contract (or per milestone if milestone-based). Statuses: `Pending`, `Released`, `Refunded`. Auto-created via Django signal (`project/signals.py`) when `Contract.status` becomes `accepted`.
+  - `release()` — blocked if open dispute exists or not funded; pays out freelancer via `_payout_to_freelancer()`.
+  - `refund()` — calls Chapa `POST /v1/refunds`; marks `Refunded` on success or failure (for manual tracking).
+- **`FreelancerBankAccount`** — OneToOne with `Freelancer`. Stores `account_type`, `account_number`, `account_name`, `bank_code` for Chapa payouts. Migration `0112`.
+- **`Dispute`** — `contract` + optional `milestone` FK; `status` in `open / cancelled / resolved / auto_resolved / drc_forwarded`.
+
+### Celery tasks (`core/tasks.py`)
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| `auto_resolve_disputes` | Hourly | Auto-closes disputes past their response deadline; notifies both parties |
+| `remove_expired_holds` | Daily 2 AM | Deletes expired `ApplicationOnHold` rows; emails candidate |
+| `update_expired_holds` | Daily 2:30 AM | Resets `FullAssessment` holds past `hold_until` |
+
+Celery app: `ethiogig/celery.py`. Beat uses `DatabaseScheduler` (django-celery-beat). docker-compose services: `celery -A ethiogig worker` and `celery -A ethiogig beat`.
 
 ### Taxonomy commands
 
@@ -236,10 +274,17 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 | Pass **all required skills** per stack (not fixed count of 2) | Done |
 | `report_proctoring_violation` + hold emails + resend endpoint | Done |
 | `disable_application_holds` on ScreeningConfig (admin) | Done |
-| **Testing bypasses** — skip AI screening / KYC / surveillance (`testing_policy.py`, migration `0110`) | Done |
+| **Testing bypasses** — skip email verify / AI screening / KYC / surveillance (`testing_policy.py`, migrations `0110`–`0111`) | Done |
 | Admin: holds clear actions, Screening config toggles, taxonomy models | Done |
-| Migrations `0106`–`0110` | Run on deploy |
+| Migrations `0106`–`0112` | Run on deploy |
 | Security: one-time tokens, rate limits | Planned |
+| Chapa escrow + payout + refund | Done |
+| `FreelancerBankAccount` + bank-account API | Done |
+| `CancelContractView` + escrow refund on cancel | Done |
+| Escrow freeze when dispute open | Done |
+| `auto_resolve_disputes` Celery task + beat schedule | Done |
+| WebSocket chat (`ChatConsumer`) + inbox push (`InboxConsumer`) | Done |
+| SendGrid removed → Django `EmailMultiAlternatives` | Done |
 
 ### Testing bypasses (local QA only)
 
@@ -247,13 +292,14 @@ Admin → **Screening configs** (`core.models.ScreeningConfig`):
 
 | Field | Backend module | Effect |
 |-------|----------------|--------|
-| `skip_ai_screening_for_testing` | `resume/testing_policy.py` | Email verify → auto-pass AI screening (no Gemini) |
+| `skip_email_verification_for_testing` | `resume/testing_policy.py` | Submit → auto-verify email + start screening |
+| `skip_ai_screening_for_testing` | same | Auto-pass AI screening (no Gemini) |
 | `skip_kyc_for_testing` | same | Auto-pass KYC → invite theoretical test |
 | `disable_surveillance_for_testing` | same + pipeline-status API | Frontend skips camera check / face proctoring |
 
 `GET /api/resumes/{id}/pipeline-status/` returns `testing_policy` alongside `hold_policy`.
 
-**Next session focus:** complete theoretical-only E2E smoke checklist in `RELEASE_READINESS.md` (bypass toggles ON, stacks 8000+8001+3000).
+**Theoretical-only E2E smoke passed 2026-06-30.** Contract/payment/chat system implemented (see `RELEASE_READINESS.md` § Contract, Escrow & Payment system).
 
 ### Current `Services.name` values (2026-06-02)
 
@@ -265,7 +311,7 @@ Admin → **Screening configs** (`core.models.ScreeningConfig`):
 | Task | Location |
 |------|----------|
 | Disable holds (testing) | **Screening configs** → **Disable application holds** |
-| Skip AI / KYC / surveillance (QA) | **Screening configs** → bypass checkboxes |
+| Skip email / AI / KYC / surveillance (QA) | **Screening configs** → bypass checkboxes |
 | Clear holds | **Resumes** → **Remove holds + reset on-hold stages** |
 | Edit stages | **Resumes** → **Vetting pipeline stages** inline |
 | Taxonomy | **Vetting stacks**, **Vetting skills**, **Services** (stack inline) |

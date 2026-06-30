@@ -4,10 +4,6 @@ ENV PYTHONUNBUFFERED 1
 
 COPY ./requirements.txt /tmp/requirements.txt
 
-COPY ./app /app
-WORKDIR /app
-EXPOSE 8000
-
 RUN apk add --update --no-cache postgresql-client jpeg-dev && \
     apk add --update --no-cache --virtual .tmp-build-deps \
     build-base postgresql-dev musl-dev zlib zlib-dev && \
@@ -23,5 +19,9 @@ RUN apk add --update --no-cache postgresql-client jpeg-dev && \
     mkdir -p /vol/web/static && \
     chown -R django-user:django-user /vol && \
     chmod -R 755 /vol
+
+COPY ./app /app
+WORKDIR /app
+EXPOSE 8000
 
 USER django-user

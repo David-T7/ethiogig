@@ -32,12 +32,14 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'channels',
     'core',
     'user',
     'rest_framework',
@@ -59,6 +61,22 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'auto-resolve-disputes-hourly': {
+        'task': 'core.tasks.auto_resolve_disputes',
+        'schedule': crontab(minute=0),          # top of every hour
+    },
+    'remove-expired-holds-daily': {
+        'task': 'core.tasks.remove_expired_holds',
+        'schedule': crontab(hour=2, minute=0),  # 2 AM daily
+    },
+    'update-expired-assessment-holds-daily': {
+        'task': 'core.tasks.update_expired_holds',
+        'schedule': crontab(hour=2, minute=30), # 2:30 AM daily
+    },
+}
 
 
 MIDDLEWARE = [
@@ -101,6 +119,19 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'ethiogig.wsgi.application'
+ASGI_APPLICATION = 'ethiogig.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [('redis', 6379)],
+        },
+    },
+}
+
+CHAPA_SECRET_KEY = os.environ.get('CHAPA_SECRET_KEY', '')
+CHAPA_BASE_URL = 'https://api.chapa.co/v1'
 
 
 # Database
@@ -212,7 +243,8 @@ EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "True") == "True"
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL")
-FRONTEND_URL = "http://localhost:3000/"
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000/')
+BACKEND_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000')
 
 # Microservice URLs — override via env vars in docker-compose.yml
 THEORETICAL_TEST_SERVICE_URL = os.environ.get('THEORETICAL_TEST_SERVICE_URL', 'http://localhost:8001')

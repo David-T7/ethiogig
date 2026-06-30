@@ -52,6 +52,29 @@ class MilestoneSerializer(serializers.ModelSerializer):
         fields = ['id', 'contract', 'title', 'description', 'amount', 'due_date', 'is_completed','milestone_update','created_at', 'updated_at' , 'status']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def validate(self, data):
+        from django.db.models import Sum
+
+        contract = data.get('contract') or (self.instance.contract if self.instance else None)
+        amount = data.get('amount') if 'amount' in data else (self.instance.amount if self.instance else None)
+
+        if not contract or not contract.amount_agreed or amount is None:
+            return data
+
+        existing_total = (
+            models.Milestone.objects
+            .filter(contract=contract)
+            .exclude(pk=self.instance.pk if self.instance else None)
+            .aggregate(total=Sum('amount'))['total'] or 0
+        )
+
+        if existing_total + amount > contract.amount_agreed:
+            raise serializers.ValidationError(
+                f"Milestone amounts would exceed the contract total of {contract.amount_agreed} Birr "
+                f"(already allocated: {existing_total}, this milestone: {amount})."
+            )
+        return data
+
 
 
 class ContractFreelancerSerializer(serializers.ModelSerializer):

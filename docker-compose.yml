@@ -4,6 +4,7 @@ services:
   app:
     build:
       context: .
+    image: ethiogig-backend
     ports:
       - "8000:8000"
     volumes:
@@ -13,7 +14,6 @@ services:
       sh -c "python manage.py wait_for_db &&
              python manage.py wait_for_redis &&
              python manage.py migrate &&
-             python manage.py setup_periodic_tasks &&
              python manage.py runserver 0.0.0.0:8000"
     environment:
       - DB_HOST=db
@@ -45,12 +45,11 @@ services:
       - redis-data:/data
 
   celery:
-    build:
-      context: .
+    image: ethiogig-backend
     command: >
       sh -c "python manage.py wait_for_db &&
              python manage.py wait_for_redis &&
-             celery -A core worker --loglevel=info"
+             celery -A ethiogig worker --loglevel=info"
     volumes:
       - ./app:/app
     environment:
@@ -67,12 +66,11 @@ services:
       - redis
 
   celery-beat:
-    build:
-      context: .
+    image: ethiogig-backend
     command: >
       sh -c "python manage.py wait_for_db &&
              python manage.py wait_for_redis &&
-             celery -A core beat --loglevel=info"
+             celery -A ethiogig beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - ./app:/app
     environment:

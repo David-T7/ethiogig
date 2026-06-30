@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-06-20  
+**Last updated:** 2026-06-30  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 **Current focus (June 2026):** Theoretical test MVP smoke path. Use admin **Screening configs** bypass toggles for local QA without Gemini, KYC (8005), or surveillance (8003). Full pipeline (practical, KYC, proctoring) remains implemented but deferred for sign-off.
@@ -68,17 +68,18 @@ Legacy constant `MIN_TECHNOLOGIES_TO_PASS = 2` in `vetting_catalog.py` — super
 
 **Testing without holds:** Admin → **Screening configs** → check **Disable application holds**. Skips creating and enforcing holds (local QA). Clear existing holds via Resume admin actions.
 
-### Admin testing bypasses (`ScreeningConfig` — migration `0110`)
+### Admin testing bypasses (`ScreeningConfig` — migrations `0110`–`0111`)
 
 All default **OFF**. Enable only in local/staging QA — **never in production**.
 
 | Toggle | Effect |
 |--------|--------|
-| **Skip AI screening for testing** | Email verify auto-passes AI screening (no Gemini call). |
+| **Skip email verification for testing** | Application submit marks email verified immediately; screening starts (no verification email). |
+| **Skip AI screening for testing** | Auto-passes AI screening (no Gemini call). |
 | **Skip KYC for testing** | Auto-passes KYC and invites **theoretical test** (no 8005). |
 | **Disable surveillance for testing** | Frontend skips camera pre-check and in-test face proctoring (no 8003 required). |
 
-**Pipeline status API** exposes flags as `testing_policy`: `{ skip_ai_screening, skip_kyc, disable_surveillance }` alongside `hold_policy`.
+**Pipeline status API** exposes flags as `testing_policy`: `{ skip_email_verification, skip_ai_screening, skip_kyc, disable_surveillance }` alongside `hold_policy`.
 
 **Typical theoretical-only local stack:** 8000 + 8001 + React 3000 (8003 optional when surveillance bypass is on).
 
@@ -101,14 +102,16 @@ All default **OFF**. Enable only in local/staging QA — **never in production**
 
 ### Theoretical-only (current MVP QA — bypass toggles ON)
 
-- [ ] Admin: enable all three testing bypasses + optionally disable holds.
-- [ ] Start Docker: main (8000), theoretical (8001), React (3000).
-- [ ] Run taxonomy sync + seed (see Taxonomy setup; steps 1–2 and link command sufficient for theory).
-- [ ] Apply with **new email** → verify email → pipeline shows **theoretical test invited** (no KYC step).
-- [ ] `/application/track` → `/application/status` → **Choose stack & tests**.
-- [ ] Start a theory skill → lands on MCQ test **without** camera check when surveillance bypass is on.
-- [ ] Complete test → hub pass/fail banner → `vetting-tech-result` recorded.
-- [ ] Pass all **required** skills in stack → pipeline advances; certificates on status page.
+- [x] Admin: enable all four testing bypasses + optionally disable holds.
+- [x] Start Docker: main (8000), theoretical (8001), React (3000).
+- [x] Run taxonomy sync + seed (see Taxonomy setup; steps 1–2 and link command sufficient for theory).
+- [x] Apply with **new email** → sign in at `/application/track` immediately (no inbox step).
+- [x] `/application/track` → `/application/status` → **Choose stack & tests**.
+- [x] Start a theory skill → lands on MCQ test **without** camera check when surveillance bypass is on.
+- [x] Complete test → hub pass/fail banner → `vetting-tech-result` recorded.
+- [x] Pass all **required** skills in stack → pipeline advances; certificates on status page.
+
+**E2E smoke passed: 2026-06-30. Theoretical test MVP is shippable.**
 
 **Reset applicant data for a fresh run** (main DB, from Django container):
 
@@ -139,10 +142,10 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] `sync_vetting_taxonomy`, `link_vetting_test_ids` management commands
 - [x] `vetting-stacks`, `vetting-progress`, `vetting-tech-result` APIs
 - [x] `hold_policy.py` + `ScreeningConfig.disable_application_holds`
-- [x] `testing_policy.py` + `ScreeningConfig` bypass toggles (AI screening, KYC, surveillance) — migration `0110`
-- [x] `testing_policy` in pipeline-status API; unit tests in `resume/tests/test_testing_policy.py`
+- [x] `testing_policy.py` + `ScreeningConfig` bypass toggles (email verify, AI screening, KYC, surveillance) — migrations `0110`–`0111`
+- [x] `testing_policy` in pipeline-status API + apply response; unit tests in `resume/tests/test_testing_policy.py`
 - [x] Hold notification email + `resend-hold-notification`
-- [x] Migrations `0106`–`0110`
+- [x] Migrations `0106`–`0111`
 - [x] Admin: pipeline inlines, holds, screening config toggles
 - [ ] One-time action tokens, rate limits (see `CLAUDE.md`)
 
@@ -153,14 +156,22 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] Camera check preserves `technology`, `skill_id`, `position` query params
 - [x] Hold UX: banner on status/hub; camera check blocked; no snapshot text in hold modal
 - [x] `applicationHold.js` + resend hold email button
-- [x] **Anti-cheat: fullscreen enforcement** — test enters fullscreen on start; exit = focus violation (same escalation ladder)
+- [x] **Anti-cheat: fullscreen enforcement** — test enters fullscreen on start; exit immediately blocks test with overlay until user returns (was just counting violations)
 - [x] **Anti-cheat: copy/paste/right-click blocked** during active test
 - [x] **Anti-cheat: devtools keyboard shortcuts blocked** (F12, Ctrl+Shift+I/J/U, PrintScreen, etc.)
+- [x] **Anti-cheat: browser back button intercepted** — `popstate` trap shows custom warning modal; "Leave anyway" fires terminal violation before navigating
+- [x] **Anti-cheat: tab close / refresh blocked** — native `beforeunload` dialog + `pagehide` keepalive fetch records violation if user confirms leave
+- [x] **Anti-cheat: violation counter survives refresh** — count written to localStorage on every violation; restored on session reload so escalation ladder can't be reset by refreshing
 - [x] **Anti-cheat: burst snapshot on focus violation** — 3 frames at 0 / 1.5 / 3 s via `triggerBurstCapture`
 - [x] **Snapshot efficiency** — baseline 15 s interval (was 10 s), 320×240 @ JPEG 0.75 (~9× less data than original)
+- [x] **Session recovery** — answers + question index saved to localStorage on every change; restored on power outage / accidental refresh with yellow "session restored" banner
+- [x] **Test UX** — Back button added; "Submit & next" → "Next"; answer options are full-width selectable cards (A/B/C/D) instead of radio buttons
+- [x] **Hub accessible after passing** — pipeline status shows "Assessment hub (optional tests)" link even when `theoretical_test` is `passed`
+- [x] **Pass threshold from ScreeningConfig** — `passing_score_threshold` field now actually applied in `report_vetting_tech_result` (was stored but ignored; test service threshold was used instead)
+- [x] **Application status button disabled during test** — `CandidateLayout` detects active test routes and renders a non-clickable span instead of a link
 - [x] Fixed `candidateId` TDZ crash in `TestPage` (moved `useCandidateAuth` above `reportFocusViolation`)
-- [x] **Testing bypass UX** — reads `testing_policy` from pipeline-status; skips camera check + surveillance when `disable_surveillance`
-- [ ] Remove JWT from query strings (P1 security)
+- [x] **Testing bypass UX** — reads `testing_policy` from pipeline-status; skips camera when `disable_surveillance`; apply page reflects `email_verification_required`
+- [ ] Remove JWT from query strings (P1 security — tokens appear in server logs, browser history, referrer headers)
 
 ### Theoretical tests (`ethiogig-testing` — 8001)
 
@@ -203,7 +214,7 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 | Task | Where |
 |------|--------|
 | **Disable holds for testing** | Admin → **Screening configs** → **Disable application holds** |
-| **Skip AI / KYC / surveillance (QA)** | Admin → **Screening configs** → three bypass checkboxes |
+| **Skip email / AI / KYC / surveillance (QA)** | Admin → **Screening configs** → bypass checkboxes |
 | Clear candidate holds | **Resumes** → action **Remove holds + reset on-hold stages** |
 | Delete hold rows only | **Application on holds** → delete selected |
 | Edit stage status | **Resumes** → **Vetting pipeline stages** inline |
@@ -225,6 +236,64 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 | ID Verification | `IDVerification` |
 
 Before release tag: migrate all DBs, run taxonomy sync + link command, seed tests, restart Docker stacks, run one full candidate smoke test.
+
+---
+
+## Contract, Escrow & Payment system (2026-06-30)
+
+### Backend
+
+| Item | Status |
+|------|--------|
+| `Escrow` auto-created via Django signal on `Contract.status → accepted` | Done |
+| `Escrow.release()` bug fixes (missing `save()`, wrong status, double-release guard) | Done |
+| `Escrow.release()` frozen when open dispute exists on contract/milestone | Done |
+| `Escrow.refund()` — calls Chapa `POST /v1/refunds`; marks `Refunded` even on API fail (admin tracks) | Done |
+| `Escrow.status` choices: `Pending`, `Released`, `Refunded` | Done |
+| `FreelancerBankAccount` model (OneToOne with Freelancer) — migration `0112` | Done |
+| `FreelancerBankAccountView` (`GET`/`PUT` `/api/user/bank-account/`) | Done |
+| Chapa `initialize_payment`, `verify_payment`, `transfer_to_bank`, `refund_payment` | Done |
+| Escrow payment views: initialize, verify, webhook (`/api/payments/escrow/…`) | Done |
+| `CancelContractView` — validates ownership, blocks on open dispute, refunds escrows, notifies | Done (`POST /api/contracts/<id>/cancel/`) |
+| `MilestoneSerializer.validate()` — sum of milestone amounts ≤ `contract.amount_agreed` | Done |
+| `auto_resolve_disputes` Celery task — runs hourly; handles no-response + no-counter-response cases | Done |
+| `celery.py` in `ethiogig/` — Celery app wired; `__init__.py` exposes `celery_app` | Done |
+| `CELERY_BEAT_SCHEDULE` in `settings.py` — dispute resolution, hold expiry tasks | Done |
+| `docker-compose.yml` — celery/beat use `-A ethiogig`; beat uses `DatabaseScheduler` | Done |
+| SendGrid removed; all emails use Django `EmailMultiAlternatives` | Done |
+| `CHAPA_SECRET_KEY` in `.env.example`; read via `os.environ.get` in settings | Done |
+| Migrations `0111` (ScreeningConfig), `0112` (FreelancerBankAccount) | Run on deploy |
+
+### Frontend
+
+| Item | Status |
+|------|--------|
+| `ContractDetailsPage` — Escrow Payments section; Fund Escrow button → Chapa checkout | Done |
+| `ContractDetailsPage` — Activate Project blocked until all escrows funded | Done |
+| `ContractDetailsPage` — Cancel Contract button + confirmation modal; handles refund warning | Done |
+| `PaymentSuccessPage` — verifies payment on return from Chapa, shows status | Done |
+| `FreelancerSettingsPage` — Payout Bank Account form (type, account number, name, bank code) | Done |
+| `CreateContractPage` — live milestone total bar; submit blocked when total ≠ contract amount | Done |
+| Inbox (`Inbox.js`, `freelancerMessages.js`) — replaced 10-second polling with WebSocket (`ws/inbox/`) | Done |
+| `REACT_APP_WS_URL=ws://localhost:8000` in `.env` | Done |
+
+### WebSocket / Real-time chat
+
+| Item | Status |
+|------|--------|
+| `ChatConsumer` — JWT auth, saves messages, broadcasts to chat room group | Done |
+| `InboxConsumer` — user-level WS at `ws/inbox/`; receives push when any chat gets a new message | Done |
+| `ChatConsumer` sends to recipient's `inbox_{user_id}` group on each saved message | Done |
+| Routes: `ws/chat/<chat_id>/` and `ws/inbox/` | Done |
+| `CHANNEL_LAYERS` using Redis via `channels_redis` | Done |
+| `REACT_APP_WS_URL` in frontend `.env` | Done |
+
+### Pending / not yet implemented
+
+- Cancellation by freelancer (currently client-only)
+- Partial cancellation (cancel one milestone, not whole contract)
+- Automated refund retry when Chapa API fails at cancel time
+- Escrow release triggered automatically on milestone approval (currently manual via admin/API)
 
 ---
 

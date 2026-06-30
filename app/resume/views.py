@@ -33,6 +33,7 @@ from .hold_policy import application_holds_enabled, active_application_hold
 from .testing_policy import (
     skip_kyc_for_testing,
     skip_ai_screening_for_testing,
+    skip_email_verification_for_testing,
     serialize_testing_policy,
 )
 
@@ -87,12 +88,21 @@ class ResumeViewSet(viewsets.ModelViewSet):
             resumes.append(resume)
 
         if resumes:
-            send_verification_email(resumes[0])
+            if skip_email_verification_for_testing():
+                _auto_verify_email_for_testing(resumes)
+            else:
+                send_verification_email(resumes[0])
 
         return Response(
             {
-                "message": "Application was successful. Please verify your email to continue.",
+                "message": (
+                    "Application was successful. You can sign in to track your progress."
+                    if skip_email_verification_for_testing()
+                    else "Application was successful. Please verify your email to continue."
+                ),
                 "resume_ids": [str(r.id) for r in resumes],
+                "email_verification_required": not skip_email_verification_for_testing(),
+                "testing_policy": serialize_testing_policy(),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -195,6 +205,15 @@ def _send_candidate_account_link_email(resume, subject, path, action_label):
     </html>
     """
     send_email(resume.email, subject, html_content)
+
+
+def _auto_verify_email_for_testing(resumes):
+    """Mark new applications verified and run screening — mirrors verify_email without token."""
+    for resume in resumes:
+        resume.is_email_verified = True
+        resume.verification_token = ""
+        resume.save(update_fields=['is_email_verified', 'verification_token'])
+        send_resume_for_screening(resume)
 
 
 def _mark_testing_skip_stage(resume, stage):
@@ -1299,6 +1318,14 @@ def report_vetting_tech_result(request, resume_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     technology = skill['name']
+
+    if test_kind == 'theoretical' and score is not None:
+        try:
+            config = ScreeningConfig.objects.first()
+            threshold = float(config.passing_score_threshold) if config else 70.0
+        except Exception:
+            threshold = 70.0
+        passed = float(score) >= threshold
 
     if test_kind == 'practical':
         theory_entry = taxonomy._get_skill_result(progress.technology_results or {}, skill).get('theoretical') or {}

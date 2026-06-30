@@ -1131,6 +1131,77 @@ class EscrowViewSet(viewsets.ModelViewSet):
         serializer.save()
         return Response(serializer.data)
 
+class CancelContractView(APIView):
+    """
+    POST /api/contracts/{id}/cancel/
+
+    Client cancels a contract. Rules:
+    - Only the client who owns the contract can cancel.
+    - Cannot cancel if status is already cancelled or completed.
+    - Cannot cancel if any open dispute exists on the contract.
+    - Funded (deposit_confirmed=True, status=Pending) escrows are refunded to the client via Chapa.
+    - Unfunded escrows are deleted.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        contract = models.Contract.objects.filter(pk=pk).first()
+        if not contract:
+            return Response({'error': 'Contract not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            client = models.Client.objects.get(pk=request.user.pk)
+        except models.Client.DoesNotExist:
+            return Response({'error': 'Only clients can cancel contracts.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if contract.client != client:
+            return Response({'error': 'You do not own this contract.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if contract.status in ('canceled', 'completed'):
+            return Response(
+                {'error': f'Contract is already {contract.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        open_dispute = models.Dispute.objects.filter(contract=contract, status='open').first()
+        if open_dispute:
+            return Response(
+                {'error': 'Contract has an open dispute. Resolve or close it before cancelling.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Refund funded escrows; delete unfunded ones
+        escrows = models.Escrow.objects.filter(contract=contract, status='Pending')
+        refund_errors = []
+        for escrow in escrows:
+            if escrow.deposit_confirmed:
+                escrow.refund()
+                if escrow.status != 'Refunded':
+                    refund_errors.append(str(escrow.id))
+            else:
+                escrow.delete()
+
+        contract.status = 'canceled'
+        contract.save(update_fields=['status'])
+
+        # Notify both parties
+        freelancer = contract.freelancer
+        msg = f'Contract "{contract.title}" has been cancelled by the client.'
+        html = f'<html><body><p>{msg}</p></body></html>'
+        send_email(client.email, 'Contract cancelled', html)
+        if freelancer:
+            send_email(freelancer.email, 'Contract cancelled', html)
+
+        response_data = {'status': 'canceled'}
+        if refund_errors:
+            response_data['refund_warnings'] = (
+                f'Chapa refund failed for escrow(s): {", ".join(refund_errors)}. '
+                'Manual refund required.'
+            )
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 class DepositConfirmedUpdateView(generics.UpdateAPIView):
     """Partial update for deposit_confirmed field"""
     queryset = models.Escrow.objects.all()

@@ -22,6 +22,7 @@ class ScreeningConfigSerializer(serializers.ModelSerializer):
         fields = [
             'passing_score_threshold',
             'disable_application_holds',
+            'skip_email_verification_for_testing',
             'skip_ai_screening_for_testing',
             'skip_kyc_for_testing',
             'disable_surveillance_for_testing',

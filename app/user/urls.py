@@ -15,7 +15,6 @@ urlpatterns = [
     path('clientFreelancerChat/', views.ChatBetweenClientFreelancerView.as_view(), name='chat-client-freelancer'),
     path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
     path('freelancerChats/', views.FreelancerChatListView.as_view(), name='freelancer-chats'),
-    path('clientChats/', views.ClientChatListView.as_view(), name='client-chats'),
     path('chats/<uuid:chat_pk>/messages/', views.MessageViewSet.as_view({'post': 'create'})),
     path('freelancer/remove/', views.RemoveFreelancerView.as_view(), name='remove-freelancer'),
     path('client/remove/', views.RemoveClientView.as_view(), name='remove-client'),
@@ -47,5 +46,6 @@ urlpatterns = [
     path('send-email/', views.send_email_, name='send-email'),
     path('sign-up/', views.sign_up, name='sign_up'),
     path("waitlist/", views.WaitlistCreateView.as_view(), name="waitlist"),
+    path('bank-account/', views.FreelancerBankAccountView.as_view(), name='bank-account'),
     path('', include(router.urls)),
 ]

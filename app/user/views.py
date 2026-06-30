@@ -884,38 +884,6 @@ class ChatBetweenClientFreelancerView(generics.GenericAPIView):
         }, status=status.HTTP_200_OK)
 
 
-class ClientChatListView(generics.GenericAPIView):
-    """View to retrieve all chats and messages for a specific client"""
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, *args, **kwargs):
-        client_id = request.query_params.get('client_id')
-        
-        if not client_id:
-            return Response({"error": "Client ID is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Filter chats by client_id
-        chats = models.Chat.objects.filter(client__id=client_id)
-        
-        if not chats.exists():
-            print("no chats found")
-            return Response({"error": "No chats found for this client."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Serialize the chats
-        chat_data = []
-        for chat in chats:
-            messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
-            message_serializer = serializers.MessageSerializer(messages, many=True)
-            chat_serializer = serializers.ChatSerializer(chat)
-            chat_data.append({
-                "chat": chat_serializer.data,
-                "messages": message_serializer.data,
-            })
-        
-        return Response(chat_data, status=status.HTTP_200_OK)
-
-
 class FreelancerChatListView(generics.GenericAPIView):
     """View to retrieve all chats and messages for a specific client"""
     authentication_classes = [JWTAuthentication]
@@ -1334,3 +1302,62 @@ def sign_up(request):
 class WaitlistCreateView(generics.CreateAPIView):
     queryset = models.Waitlist.objects.all()
     serializer_class = serializers.WaitlistSerializer
+
+
+class FreelancerBankAccountView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_freelancer(self, user):
+        try:
+            return models.Freelancer.objects.get(pk=user.pk)
+        except models.Freelancer.DoesNotExist:
+            return None
+
+    def get(self, request):
+        freelancer = self._get_freelancer(request.user)
+        if not freelancer:
+            return Response({'error': 'Freelancer profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            bank = freelancer.bank_account
+            return Response({
+                'account_type': bank.account_type,
+                'account_number': bank.account_number,
+                'account_name': bank.account_name,
+                'bank_code': bank.bank_code,
+            })
+        except models.FreelancerBankAccount.DoesNotExist:
+            return Response({}, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        freelancer = self._get_freelancer(request.user)
+        if not freelancer:
+            return Response({'error': 'Freelancer profile not found.'}, status=status.HTTP_403_FORBIDDEN)
+
+        data = request.data
+        account_number = (data.get('account_number') or '').strip()
+        account_name = (data.get('account_name') or '').strip()
+        account_type = data.get('account_type', 'bank')
+        bank_code = (data.get('bank_code') or '').strip()
+
+        if not account_number or not account_name:
+            return Response(
+                {'error': 'account_number and account_name are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        bank, _ = models.FreelancerBankAccount.objects.update_or_create(
+            freelancer=freelancer,
+            defaults={
+                'account_type': account_type,
+                'account_number': account_number,
+                'account_name': account_name,
+                'bank_code': bank_code,
+            },
+        )
+        return Response({
+            'account_type': bank.account_type,
+            'account_number': bank.account_number,
+            'account_name': bank.account_name,
+            'bank_code': bank.bank_code,
+        })
