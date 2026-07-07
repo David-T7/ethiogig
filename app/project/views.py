@@ -164,11 +164,19 @@ class ContractViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Auto-release escrow when a non-milestone contract is marked completed
+        new_status = request.data.get('status')
+        if new_status == 'completed' and not instance.milestone_based:
+            escrow = models.Escrow.objects.filter(contract=instance, milestone__isnull=True).first()
+            if escrow:
+                escrow.release()
+
         message = ""
         subject = ""
         if 'status' in request.data and request.data['status'] == 'pending':
             message = "You have received a contract offer."
-            subject = "Contract Offer" 
+            subject = "Contract Offer"
         else:
             message = f"Contract status updated to " + request.data['status']
             subject = "Contract status updated"
@@ -1146,6 +1154,8 @@ class CancelContractView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
+        from django.db import transaction as db_transaction
+
         contract = models.Contract.objects.filter(pk=pk).first()
         if not contract:
             return Response({'error': 'Contract not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1164,26 +1174,33 @@ class CancelContractView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        open_dispute = models.Dispute.objects.filter(contract=contract, status='open').first()
-        if open_dispute:
+        # Fix 1: block cancellation of active contracts — freelancer may be working
+        if contract.status == 'active':
+            return Response(
+                {'error': 'Contract is active. Open a dispute if you need to exit.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if models.Dispute.objects.filter(contract=contract, status='open').exists():
             return Response(
                 {'error': 'Contract has an open dispute. Resolve or close it before cancelling.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Refund funded escrows; delete unfunded ones
-        escrows = models.Escrow.objects.filter(contract=contract, status='Pending')
+        # Fix 2: lock escrow rows inside a transaction to prevent concurrent double-refund
         refund_errors = []
-        for escrow in escrows:
-            if escrow.deposit_confirmed:
-                escrow.refund()
-                if escrow.status != 'Refunded':
-                    refund_errors.append(str(escrow.id))
-            else:
-                escrow.delete()
+        with db_transaction.atomic():
+            escrows = models.Escrow.objects.select_for_update().filter(contract=contract, status='Pending')
+            for escrow in escrows:
+                if escrow.deposit_confirmed:
+                    escrow.refund()
+                    if escrow.status != 'Refunded':
+                        refund_errors.append(str(escrow.id))
+                else:
+                    escrow.delete()
 
-        contract.status = 'canceled'
-        contract.save(update_fields=['status'])
+            contract.status = 'canceled'
+            contract.save(update_fields=['status'])
 
         # Notify both parties
         freelancer = contract.freelancer
@@ -1197,9 +1214,140 @@ class CancelContractView(APIView):
         if refund_errors:
             response_data['refund_warnings'] = (
                 f'Chapa refund failed for escrow(s): {", ".join(refund_errors)}. '
-                'Manual refund required.'
+                'These escrows are marked RefundFailed in the admin — manual intervention required.'
             )
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class FreelancerCancelContractView(APIView):
+    """
+    POST /api/contracts/{id}/freelancer-cancel/
+
+    Freelancer cancels a contract they have accepted, but only while no escrow
+    has been funded yet (deposit_confirmed=False on all escrows). Once the client
+    has paid into escrow the contract is active and a dispute is required instead.
+
+    Rules:
+    - Must be the freelancer on this contract.
+    - Contract status must be 'pending' or 'accepted' (not yet active/completed/cancelled).
+    - No escrow may be funded (deposit_confirmed=True).
+    - No open disputes on the contract.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        contract = models.Contract.objects.filter(pk=pk).first()
+        if not contract:
+            return Response({'error': 'Contract not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            freelancer = models.Freelancer.objects.get(pk=request.user.pk)
+        except models.Freelancer.DoesNotExist:
+            return Response({'error': 'Only freelancers can use this endpoint.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if contract.freelancer != freelancer:
+            return Response({'error': 'You are not the freelancer on this contract.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if contract.status in ('canceled', 'completed'):
+            return Response(
+                {'error': f'Contract is already {contract.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if contract.status == 'active':
+            return Response(
+                {'error': 'Contract is already active with funded escrow. Open a dispute if you need to exit.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if models.Dispute.objects.filter(contract=contract, status='open').exists():
+            return Response(
+                {'error': 'Contract has an open dispute. Resolve it before cancelling.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if models.Escrow.objects.filter(contract=contract, deposit_confirmed=True).exists():
+            return Response(
+                {'error': 'Escrow has already been funded. Open a dispute if you need to exit.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Safe to cancel — delete unfunded escrow rows and mark cancelled
+        models.Escrow.objects.filter(contract=contract).delete()
+        contract.status = 'canceled'
+        contract.save(update_fields=['status'])
+
+        msg = f'Contract "{contract.title}" has been cancelled by the freelancer.'
+        html = f'<html><body><p>{msg}</p></body></html>'
+        if contract.client:
+            send_email(contract.client.email, 'Contract cancelled', html)
+        send_email(freelancer.email, 'Contract cancelled', html)
+
+        return Response({'status': 'canceled'}, status=status.HTTP_200_OK)
+
+
+class ApproveMilestoneView(APIView):
+    """
+    POST /api/milestones/{id}/approve/
+
+    Client approves a milestone that is in pendingApproval status.
+    Sets milestone to completed and triggers escrow release (payout to freelancer).
+    If all milestones are now completed, the contract is also marked completed.
+
+    Rules:
+    - Must be the client on this contract.
+    - Milestone must be in pendingApproval status.
+    - No open dispute on this milestone.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        milestone = models.Milestone.objects.filter(pk=pk).select_related('contract').first()
+        if not milestone:
+            return Response({'error': 'Milestone not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            client = models.Client.objects.get(pk=request.user.pk)
+        except models.Client.DoesNotExist:
+            return Response({'error': 'Only clients can approve milestones.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if milestone.contract.client != client:
+            return Response({'error': 'You do not own this contract.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if milestone.status != 'pendingApproval':
+            return Response(
+                {'error': f'Milestone is not pending approval (current status: {milestone.status}).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if models.Dispute.objects.filter(
+            contract=milestone.contract, milestone=milestone, status='open'
+        ).exists():
+            return Response(
+                {'error': 'Milestone has an open dispute. Resolve it before approving.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        milestone.status = 'completed'
+        milestone.save(update_fields=['status'])
+
+        escrow = models.Escrow.objects.filter(
+            contract=milestone.contract, milestone=milestone
+        ).first()
+        if escrow:
+            escrow.release()
+
+        # If all milestones on this contract are now completed, close the contract too
+        has_incomplete = models.Milestone.objects.filter(
+            contract=milestone.contract
+        ).exclude(status='completed').exists()
+        if not has_incomplete:
+            milestone.contract.status = 'completed'
+            milestone.contract.save(update_fields=['status'])
+
+        return Response({'status': 'completed'}, status=status.HTTP_200_OK)
 
 
 class DepositConfirmedUpdateView(generics.UpdateAPIView):

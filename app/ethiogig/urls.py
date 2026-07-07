@@ -13,7 +13,7 @@ from project.payment_views import (
     VerifyEscrowPaymentView,
     ChapaWebhookView,
 )
-from project.views import CancelContractView
+from project.views import CancelContractView, FreelancerCancelContractView, ApproveMilestoneView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -31,6 +31,8 @@ urlpatterns = [
 
     # Contract cancellation
     path('api/contracts/<uuid:pk>/cancel/', CancelContractView.as_view(), name='contract-cancel'),
+    path('api/contracts/<uuid:pk>/freelancer-cancel/', FreelancerCancelContractView.as_view(), name='contract-freelancer-cancel'),
+    path('api/milestones/<uuid:pk>/approve/', ApproveMilestoneView.as_view(), name='milestone-approve'),
 
     # Chapa payment endpoints
     path('api/payments/escrow/<uuid:escrow_id>/initialize/', InitializeEscrowPaymentView.as_view(), name='chapa-init'),

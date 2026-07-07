@@ -382,7 +382,12 @@ class Escrow(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     contract = models.ForeignKey('Contract', on_delete=models.CASCADE)
     milestone = models.OneToOneField('Milestone', on_delete=models.CASCADE , null=True , blank=True)
-    status = models.CharField(max_length=20, choices=[('Pending', 'Pending'), ('Released', 'Released'), ('Refunded', 'Refunded')])
+    status = models.CharField(max_length=20, choices=[
+        ('Pending', 'Pending'),
+        ('Released', 'Released'),
+        ('Refunded', 'Refunded'),
+        ('RefundFailed', 'Refund Failed'),
+    ])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deposit_confirmed = models.BooleanField(blank=True , default=False)
@@ -448,8 +453,8 @@ class Escrow(models.Model):
     def refund(self):
         """
         Refund the escrow to the client. Only valid when funded and not yet released.
-        Calls Chapa refund API; on failure logs a warning but still marks as Refunded
-        so the manual refund can be tracked externally.
+        On Chapa success: marks Refunded.
+        On Chapa failure: marks RefundFailed — admin must intervene manually.
         """
         import logging
         from project import chapa as chapa_client
@@ -461,11 +466,12 @@ class Escrow(models.Model):
         tx_ref = f'ethiogig-escrow-{self.id}'
         try:
             chapa_client.refund_payment(tx_ref, amount=self.amount)
-            logger.info('Chapa refund initiated for escrow %s', self.id)
+            logger.info('Chapa refund succeeded for escrow %s', self.id)
+            self.status = 'Refunded'
         except RuntimeError as exc:
-            logger.error('Chapa refund failed for escrow %s: %s — mark for manual refund', self.id, exc)
+            logger.error('Chapa refund failed for escrow %s: %s', self.id, exc)
+            self.status = 'RefundFailed'
 
-        self.status = 'Refunded'
         self.save(update_fields=['status'])
 
     def __str__(self):
@@ -987,3 +993,14 @@ class SkillCertificate(models.Model):
     def __str__(self):
         return f'{self.skill.name} — {self.resume.email}'
 
+
+class CandidateActionToken(models.Model):
+    """One-time token for password/email change magic links."""
+    jti = models.UUIDField(default=uuid.uuid4, unique=True)
+    resume = models.ForeignKey('Resume', on_delete=models.CASCADE, related_name='action_tokens')
+    purpose = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f'{self.purpose} — {self.resume.email} ({"used" if self.used_at else "unused"})'

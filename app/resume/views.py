@@ -5,6 +5,7 @@ import json
 
 from django.shortcuts import get_object_or_404
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from django.utils.timezone import now
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -166,13 +167,24 @@ def generate_candidate_token(resume):
 
 
 def generate_candidate_action_token(resume_id, purpose):
+    jti = uuid.uuid4()
+    models.CandidateActionToken.objects.create(jti=jti, resume_id=resume_id, purpose=purpose)
     payload = {
         'user_id': str(resume_id),
         'purpose': purpose,
         'role': 'candidate_action',
+        'jti': str(jti),
         'exp': datetime.utcnow() + timedelta(hours=24),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+
+def _check_action_token_rate_limit(resume_id, purpose, max_per_hour=3):
+    cutoff = timezone.now() - timedelta(hours=1)
+    count = models.CandidateActionToken.objects.filter(
+        resume_id=resume_id, purpose=purpose, created_at__gte=cutoff,
+    ).count()
+    return count >= max_per_hour
 
 
 def decode_candidate_action_token(token, expected_purpose):
@@ -187,6 +199,26 @@ def decode_candidate_action_token(token, expected_purpose):
 
     if payload.get('role') != 'candidate_action' or payload.get('purpose') != expected_purpose:
         return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    jti = payload.get('jti')
+    if not jti:
+        return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        try:
+            action_token = models.CandidateActionToken.objects.select_for_update().get(jti=jti)
+        except models.CandidateActionToken.DoesNotExist:
+            return None, Response(
+                {'error': 'This link has already been used or is invalid.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if action_token.used_at is not None:
+            return None, Response(
+                {'error': 'This link has already been used. Request a new one from your application status page.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        action_token.used_at = timezone.now()
+        action_token.save(update_fields=['used_at'])
 
     return payload, None
 
@@ -672,6 +704,12 @@ def request_password_change_link(request, resume_id):
     except models.Resume.DoesNotExist:
         return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    if _check_action_token_rate_limit(resume.id, 'change_password'):
+        return Response(
+            {'error': 'Too many requests. Please wait before requesting another password change link.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     token = generate_candidate_action_token(resume.id, 'change_password')
     _send_candidate_account_link_email(
         resume,
@@ -732,6 +770,12 @@ def request_email_change_link(request, resume_id):
         resume = models.Resume.objects.get(id=resume_id)
     except models.Resume.DoesNotExist:
         return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if _check_action_token_rate_limit(resume.id, 'change_email'):
+        return Response(
+            {'error': 'Too many requests. Please wait before requesting another email change link.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
 
     token = generate_candidate_action_token(resume.id, 'change_email')
     _send_candidate_account_link_email(

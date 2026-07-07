@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-06-30  
+**Last updated:** 2026-07-07  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 **Current focus (June 2026):** Theoretical test MVP smoke path. Use admin **Screening configs** bypass toggles for local QA without Gemini, KYC (8005), or surveillance (8003). Full pipeline (practical, KYC, proctoring) remains implemented but deferred for sign-off.
@@ -145,9 +145,10 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] `testing_policy.py` + `ScreeningConfig` bypass toggles (email verify, AI screening, KYC, surveillance) — migrations `0110`–`0111`
 - [x] `testing_policy` in pipeline-status API + apply response; unit tests in `resume/tests/test_testing_policy.py`
 - [x] Hold notification email + `resend-hold-notification`
-- [x] Migrations `0106`–`0111`
+- [x] Migrations `0106`–`0114`
 - [x] Admin: pipeline inlines, holds, screening config toggles
-- [ ] One-time action tokens, rate limits (see `CLAUDE.md`)
+- [x] **Security: one-time action tokens** — `CandidateActionToken` model (migration `0113`); `generate_candidate_action_token` saves `jti` to DB; `decode_candidate_action_token` validates one-time use with `select_for_update`; replayed links rejected
+- [x] **Security: rate limiting** — `_check_action_token_rate_limit` on `request-password-change` and `request-email-change`; max 3 per resume/purpose per hour (DB-based, no extra cache infra)
 
 ### Frontend (`ethiogurus_frontend` — 3000)
 
@@ -171,7 +172,7 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] **Application status button disabled during test** — `CandidateLayout` detects active test routes and renders a non-clickable span instead of a link
 - [x] Fixed `candidateId` TDZ crash in `TestPage` (moved `useCandidateAuth` above `reportFocusViolation`)
 - [x] **Testing bypass UX** — reads `testing_policy` from pipeline-status; skips camera when `disable_surveillance`; apply page reflects `email_verification_required`
-- [ ] Remove JWT from query strings (P1 security — tokens appear in server logs, browser history, referrer headers)
+- [x] **Security: JWT stripped from URL** — `useCandidateAuth` saves token to sessionStorage then `replaceState` removes `?token=` from URL; 8 files updated to never put session JWT in navigation URLs; magic-link pages (`change-password`, `change-email`) strip action token from URL on mount
 
 ### Theoretical tests (`ethiogig-testing` — 8001)
 
@@ -248,13 +249,18 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 | `Escrow` auto-created via Django signal on `Contract.status → accepted` | Done |
 | `Escrow.release()` bug fixes (missing `save()`, wrong status, double-release guard) | Done |
 | `Escrow.release()` frozen when open dispute exists on contract/milestone | Done |
-| `Escrow.refund()` — calls Chapa `POST /v1/refunds`; marks `Refunded` even on API fail (admin tracks) | Done |
-| `Escrow.status` choices: `Pending`, `Released`, `Refunded` | Done |
+| `Escrow.refund()` — calls Chapa `POST /v1/refunds`; marks `Refunded` on success, `RefundFailed` on failure | Done |
+| `Escrow.status` choices: `Pending`, `Released`, `Refunded`, `RefundFailed` — migration `0114` | Done |
 | `FreelancerBankAccount` model (OneToOne with Freelancer) — migration `0112` | Done |
 | `FreelancerBankAccountView` (`GET`/`PUT` `/api/user/bank-account/`) | Done |
 | Chapa `initialize_payment`, `verify_payment`, `transfer_to_bank`, `refund_payment` | Done |
 | Escrow payment views: initialize, verify, webhook (`/api/payments/escrow/…`) | Done |
 | `CancelContractView` — validates ownership, blocks on open dispute, refunds escrows, notifies | Done (`POST /api/contracts/<id>/cancel/`) |
+| `CancelContractView` — **blocks cancellation of `active` contracts**; escrow loop wrapped in `select_for_update` + `transaction.atomic()` to prevent double-refund race | Done |
+| `FreelancerCancelContractView` — freelancer cancels `pending`/`accepted` contract when no escrow is funded; deletes unfunded escrows, notifies both parties | Done (`POST /api/contracts/<id>/freelancer-cancel/`) |
+| `ApproveMilestoneView` — client approves `pendingApproval` milestone; triggers `escrow.release()` → Chapa payout; auto-closes contract when all milestones complete | Done (`POST /api/milestones/<id>/approve/`) |
+| `ContractViewSet.update()` — auto-calls `escrow.release()` when non-milestone contract set to `completed` | Done |
+| `Escrow` registered in Django admin with status filter — `RefundFailed` escrows visible for manual action | Done |
 | `MilestoneSerializer.validate()` — sum of milestone amounts ≤ `contract.amount_agreed` | Done |
 | `auto_resolve_disputes` Celery task — runs hourly; handles no-response + no-counter-response cases | Done |
 | `celery.py` in `ethiogig/` — Celery app wired; `__init__.py` exposes `celery_app` | Done |
@@ -270,7 +276,8 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 |------|--------|
 | `ContractDetailsPage` — Escrow Payments section; Fund Escrow button → Chapa checkout | Done |
 | `ContractDetailsPage` — Activate Project blocked until all escrows funded | Done |
-| `ContractDetailsPage` — Cancel Contract button + confirmation modal; handles refund warning | Done |
+| `ContractDetailsPage` — Cancel Contract button hidden for `active` contracts; inline error/warning banners replace `alert()` | Done |
+| `ContractDetailsPage` — milestone cards show **Approve & Release Payment** button when `pendingApproval`; calls `ApproveMilestoneView` | Done |
 | `PaymentSuccessPage` — verifies payment on return from Chapa, shows status | Done |
 | `FreelancerSettingsPage` — Payout Bank Account form (type, account number, name, bank code) | Done |
 | `CreateContractPage` — live milestone total bar; submit blocked when total ≠ contract amount | Done |
@@ -290,10 +297,8 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 
 ### Pending / not yet implemented
 
-- Cancellation by freelancer (currently client-only)
 - Partial cancellation (cancel one milestone, not whole contract)
-- Automated refund retry when Chapa API fails at cancel time
-- Escrow release triggered automatically on milestone approval (currently manual via admin/API)
+- Automated refund retry — deferred pending Chapa idempotency confirmation (risk of double-refund without it); `RefundFailed` escrows handled manually via admin
 
 ---
 

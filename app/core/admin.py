@@ -110,6 +110,13 @@ admin.site.register(models.FreelancerInterview)
 admin.site.register(models.SkillSearch)
 admin.site.register(models.Chat)
 admin.site.register(models.Message)
+class EscrowAdmin(admin.ModelAdmin):
+    list_display = ('id', 'contract', 'milestone', 'amount', 'status', 'deposit_confirmed', 'updated_at')
+    list_filter = ('status', 'deposit_confirmed')
+    search_fields = ('id', 'contract__title')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+
+admin.site.register(models.Escrow, EscrowAdmin)
 admin.site.register(models.Contract)
 admin.site.register(models.Milestone)
 admin.site.register(models.Dispute)
