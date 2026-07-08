@@ -149,6 +149,7 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] Admin: pipeline inlines, holds, screening config toggles
 - [x] **Security: one-time action tokens** — `CandidateActionToken` model (migration `0113`); `generate_candidate_action_token` saves `jti` to DB; `decode_candidate_action_token` validates one-time use with `select_for_update`; replayed links rejected
 - [x] **Security: rate limiting** — `_check_action_token_rate_limit` on `request-password-change` and `request-email-change`; max 3 per resume/purpose per hour (DB-based, no extra cache infra)
+- [x] **Security: dedicated `CANDIDATE_ACTION_SECRET_KEY`** — magic-link JWTs (password/email change) now signed with a separate key from `SECRET_KEY`; a leaked session token cannot be crafted into a password-reset link; set via env var in production
 
 ### Frontend (`ethiogurus_frontend` — 3000)
 

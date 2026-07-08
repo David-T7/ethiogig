@@ -23,6 +23,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-b@u6mc&!d1h$97%5m_wo_m=l^6gvao22e$s_)3!7o$19h(5ha9'
 
+# Separate signing key for candidate magic-link tokens (password/email change).
+# Must NOT equal SECRET_KEY in production — set via env var.
+CANDIDATE_ACTION_SECRET_KEY = os.environ.get(
+    'CANDIDATE_ACTION_SECRET_KEY',
+    'dev-action-key-change-in-production',
+)
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 

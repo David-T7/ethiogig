@@ -253,7 +253,7 @@ MVP magic-link flow is documented above. **Implement before calling production-r
 4. **Token transport** — Avoid long JWTs in query strings (referrer/history/logs); prefer opaque DB token or frontend URL fragment.
 5. **Password policy** — Raise minimum length; optional HIBP k-anonymity check.
 6. **TTL split** — Shorter expiry for `change_password` (e.g. 1h) vs `change_email` (24h).
-7. **Signing key** — Dedicated secret for `candidate_action` JWTs, not shared `SECRET_KEY` across all services (or accept risk with rotation plan).
+7. **Signing key** — ✅ Done: `CANDIDATE_ACTION_SECRET_KEY` in `settings.py` (env var); `generate_candidate_action_token` and `decode_candidate_action_token` use this key, not `SECRET_KEY`.
 8. **Email uniqueness** — On confirm, block `new_email` if **any** `Resume` uses it, not only `is_email_verified=True`.
 9. **Deprecate** `change_candidate_password` direct API if product only supports email links.
 

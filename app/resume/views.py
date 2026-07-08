@@ -179,7 +179,7 @@ def generate_candidate_action_token(resume_id, purpose):
         'jti': str(jti),
         'exp': datetime.utcnow() + timedelta(hours=24),
     }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+    return jwt.encode(payload, settings.CANDIDATE_ACTION_SECRET_KEY, algorithm='HS256')
 
 
 def _check_action_token_rate_limit(resume_id, purpose, max_per_hour=3):
@@ -194,7 +194,7 @@ def decode_candidate_action_token(token, expected_purpose):
     if not token:
         return None, Response({'error': 'Token is required.'}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+        payload = jwt.decode(token, settings.CANDIDATE_ACTION_SECRET_KEY, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
         return None, Response({'error': 'This link has expired. Request a new one from your application status page.'}, status=status.HTTP_400_BAD_REQUEST)
     except jwt.InvalidTokenError:
