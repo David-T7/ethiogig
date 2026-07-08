@@ -276,8 +276,9 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 | `disable_application_holds` on ScreeningConfig (admin) | Done |
 | **Testing bypasses** — skip email verify / AI screening / KYC / surveillance (`testing_policy.py`, migrations `0110`–`0111`) | Done |
 | Admin: holds clear actions, Screening config toggles, taxonomy models | Done |
-| Migrations `0106`–`0112` | Run on deploy |
-| Security: one-time tokens, rate limits | Planned |
+| Migrations `0106`–`0115` | Run on deploy |
+| Security audit — auth/ownership/race across all 6 services | Done (2026-07-08) |
+| Security: one-time action tokens, rate limits (prod hardening) | Planned |
 | Chapa escrow + payout + refund | Done |
 | `FreelancerBankAccount` + bank-account API | Done |
 | `CancelContractView` + escrow refund on cancel | Done |
