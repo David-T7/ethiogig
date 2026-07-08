@@ -1,5 +1,8 @@
 import json
+import logging
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 from django.shortcuts import render
 from rest_framework import generics, authentication, permissions, status , viewsets
 from rest_framework.response import Response
@@ -106,9 +109,6 @@ class LoginView(APIView):
                 'assessment_started':assessment_started,
                 'email_verified':email_verfied,
             }
-            print("data is ",data)
-            print("assessment started ",assessment_started)
-            
             return Response(data, status=status.HTTP_200_OK)
         
         # Return error if authentication failed
@@ -122,9 +122,7 @@ class UserRoleView(APIView):
 
     def get(self, request):
         # Extract the user role from the request.user object
-        print("Received request with data:", request.data)
         user = request.user
-        print("user is ",user)
         if models.Freelancer.objects.filter(id=user.id).exists():
             role = 'freelancer'
         elif models.Client.objects.filter(id=user.id).exists():
@@ -162,7 +160,6 @@ class UserTypeView(APIView):
         user_id = request.data.get('user_id')
         if not user_id:
             return Response({"error": "User ID not provided"}, status=status.HTTP_400_BAD_REQUEST)
-        print("******* user id is ********",user_id)
         # Check user type based on the ID
         if models.DisputeManager.objects.filter(id=str(user_id)).exists():
             user_type = "dispute-manager"
@@ -244,10 +241,9 @@ def send_email(to_email, subject, html_content):
     email_message.attach_alternative(html_content, "text/html")
     try:
         email_message.send(fail_silently=False)
-        print("email sent")
         return 200
     except Exception as e:
-        print("error sending email", str(e))
+        logger.error("error sending email: %s", str(e))
         return str(e)
 
 
@@ -293,12 +289,10 @@ Click the link below to verify your email address:
 
         email_message.attach_alternative(html_content, "text/html")
         email_message.send(fail_silently=False)
-
-        print("Email sent successfully")
         return Response({'message': 'Email sent successfully'}, status=status.HTTP_200_OK)
 
     except Exception as e:
-        print("Email sending failed:", e)
+        logger.error("Email sending failed: %s", e)
         return Response({'error': 'Failed to send email'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -332,8 +326,6 @@ def send_verification_email(user , verification_token):
 
 @api_view(['POST'])
 def verify_email(request):
-    print("Trying to find user...")
-
     token = request.data.get('token')
     pk = request.data.get('pk')
 
@@ -348,8 +340,6 @@ def verify_email(request):
 
     # Find the user with the decoded id
     user = get_object_or_404(User, pk=user_id)
-    print("token is ",token)
-    print("user token is ", user.verification_token)
     # Check if the verification token matches
     if user.verification_token != token:
         return Response({"error": "Invalid or missing verification token."}, status=status.HTTP_400_BAD_REQUEST)
@@ -554,9 +544,8 @@ class ManageFreelancerView(generics.RetrieveUpdateAPIView):
 
 
 
-def get_available_interviewers( category):
+def get_available_interviewers(category):
         """Get interviewers who match the category and have availability."""
-        print("Trying to get interviewers for category:", category)
         
         # Normalize the category string
         expertise = models.Services.objects.filter(name__icontains=category).first()
@@ -811,20 +800,34 @@ class ChatViewSet(viewsets.ModelViewSet):
 
 class MessageViewSet(viewsets.ModelViewSet):
     """View for managing messages in a chat"""
-    queryset = models.Message.objects.all()
     serializer_class = serializers.MessageSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
-    def create(self, request, *args, **kwargs):
-        print(f"Received request data: {request.data}")  # Debugging line
-        return super().create(request, *args, **kwargs)
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        if user_client:
+            return models.Message.objects.filter(chat__client=user_client)
+        if user_freelancer:
+            return models.Message.objects.filter(chat__freelancer=user_freelancer)
+        return models.Message.objects.none()
 
     def perform_create(self, serializer):
-        """Create a message in a chat"""
         chat_id = self.kwargs.get('chat_pk')
         chat = generics.get_object_or_404(models.Chat, pk=chat_id)
-        serializer.save(chat=chat, sender=self.request.user)
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        is_party = (
+            (user_client and chat.client == user_client) or
+            (user_freelancer and chat.freelancer == user_freelancer)
+        )
+        if not is_party:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('You are not a party to this chat.')
+        serializer.save(chat=chat, sender=user)
 
 class MarkMessagesAsReadView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -834,15 +837,23 @@ class MarkMessagesAsReadView(APIView):
         serializer = serializers.MarkMessagesAsReadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         message_ids = serializer.validated_data['message_ids']
-        
-        # Fetch messages that belong to the authenticated user and are unread
-        messages = models.Message.objects.filter(
-            id__in=message_ids,
-            read=False,
-        )
 
-        # Update the 'read' status
-        updated_count = messages.update(read=True)
+        user = request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+
+        if user_client:
+            user_chats = models.Chat.objects.filter(client=user_client)
+        elif user_freelancer:
+            user_chats = models.Chat.objects.filter(freelancer=user_freelancer)
+        else:
+            return Response({'error': 'User is not a client or freelancer.'}, status=status.HTTP_403_FORBIDDEN)
+
+        updated_count = models.Message.objects.filter(
+            id__in=message_ids,
+            chat__in=user_chats,
+            read=False,
+        ).update(read=True)
 
         return Response(
             {"message": f"{updated_count} message(s) marked as read."},
@@ -861,20 +872,29 @@ class ChatBetweenClientFreelancerView(generics.GenericAPIView):
         client_id = request.query_params.get('client_id')
         freelancer_id = request.query_params.get('freelancer_id')
 
-        # Validate that both IDs are provided
         if not client_id or not freelancer_id:
             return Response(
                 {"detail": "client_id and freelancer_id are required."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Fetch the chat between client and freelancer
-        chat = models.Chat.objects.filter(client_id=client_id, freelancer_id=freelancer_id).first()
+        user = request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        is_party = (
+            (user_client and str(user_client.id) == str(client_id)) or
+            (user_freelancer and str(user_freelancer.id) == str(freelancer_id))
+        )
+        if not is_party:
+            return Response(
+                {'error': 'You are not a party to this conversation.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
+        chat = models.Chat.objects.filter(client_id=client_id, freelancer_id=freelancer_id).first()
         if not chat:
             return Response([], status=status.HTTP_200_OK)
 
-        # Serialize the chat and its messages
         chat_serializer = serializers.ChatSerializer(chat)
         messages_serializer = serializers.MessageSerializer(chat.messages.all(), many=True)
 
@@ -885,63 +905,44 @@ class ChatBetweenClientFreelancerView(generics.GenericAPIView):
 
 
 class FreelancerChatListView(generics.GenericAPIView):
-    """View to retrieve all chats and messages for a specific client"""
+    """View to retrieve all chats and messages for the authenticated freelancer."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        freelancer_id = request.query_params.get('freelancer_id')
-        
-        if not freelancer_id:
-            return Response({"error": "Freelancer ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        user_freelancer = getattr(request.user, 'freelancer', None)
+        if not user_freelancer:
+            return Response({'error': 'Only freelancers can access this endpoint.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Filter chats by client_id
-        chats = models.Chat.objects.filter(freelancer__id=freelancer_id)
+        chats = models.Chat.objects.filter(freelancer=user_freelancer)
         chat_data = []
-
-        if not chats.exists():
-            return Response(chat_data, status=status.HTTP_200_OK)
-
-        # Serialize the chats
         for chat in chats:
             messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
-            message_serializer = serializers.MessageSerializer(messages, many=True)
-            chat_serializer = serializers.ChatSerializer(chat)
             chat_data.append({
-                "chat": chat_serializer.data,
-                "messages": message_serializer.data,
+                "chat": serializers.ChatSerializer(chat).data,
+                "messages": serializers.MessageSerializer(messages, many=True).data,
             })
-        
         return Response(chat_data, status=status.HTTP_200_OK)
 
+
 class ClientChatListView(generics.GenericAPIView):
-    """View to retrieve all chats and messages for a specific client"""
+    """View to retrieve all chats and messages for the authenticated client."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        client_id = request.query_params.get('client_id')
-        
-        if not client_id:
-            return Response({"error": "Client ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        user_client = getattr(request.user, 'client', None)
+        if not user_client:
+            return Response({'error': 'Only clients can access this endpoint.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Filter chats by client_id
-        chats = models.Chat.objects.filter(client__id=client_id)
+        chats = models.Chat.objects.filter(client=user_client)
         chat_data = []
-
-        if not chats.exists():
-            return Response(chat_data, status=status.HTTP_200_OK)
-
-        # Serialize the chats
         for chat in chats:
             messages = models.Message.objects.filter(chat=chat).order_by('timestamp')
-            message_serializer = serializers.MessageSerializer(messages, many=True)
-            chat_serializer = serializers.ChatSerializer(chat)
             chat_data.append({
-                "chat": chat_serializer.data,
-                "messages": message_serializer.data,
+                "chat": serializers.ChatSerializer(chat).data,
+                "messages": serializers.MessageSerializer(messages, many=True).data,
             })
-        
         return Response(chat_data, status=status.HTTP_200_OK)
 
 
@@ -1215,28 +1216,18 @@ def updateAppointmentDateOptions(freelancer_interview):
         for interview in interviews:
             available_interviewers = get_available_interviewers(interview.appointment.category)
             if available_interviewers:
-                print("trying to get available appointment dates...")
-                # Generate appointment date options for available interviewers
                 appointment_date_options = generate_appointment_date_options(available_interviewers)
-                print("available appointment dates found", appointment_date_options)
-                print("appointment id is ", interview.appointment.id)
-                
-                # Convert interviewer_id UUIDs to strings
                 appointment_date_options_serializable = [
                     {
                         'interviewer_id': str(option['interviewer_id']),
                         'date': option['date']
                     } for option in appointment_date_options
                 ]
-                print("serializable appointment_date_options:", appointment_date_options_serializable)
-    
-                # Assign the serializable data
                 appointment = models.Appointment.objects.get(pk=interview.appointment.id)
-                appointment.appointment_date_options = appointment_date_options_serializable       
+                appointment.appointment_date_options = appointment_date_options_serializable
                 appointment.save()
-                print("appointment is saved ")
     except Exception as e:
-        print(f"Error in updateAppointmentDateOptions: {e}")
+        logger.exception("Error in updateAppointmentDateOptions: %s", e)
         raise
 
 
@@ -1259,6 +1250,12 @@ class VerifyFreelancerSkillsView(APIView):
                 {"detail": "Both 'skills_passed', 'category', and 'freelancer_id' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Verify the freelancer is assigned to this interviewer
+        if not models.FreelancerInterview.objects.filter(
+            interviewer=request.user, freelancer_id=freelancer_id
+        ).exists():
+            raise PermissionDenied("You are not assigned to this freelancer.")
 
         # Retrieve the freelancer
         freelancer = get_object_or_404(models.Freelancer, id=freelancer_id)

@@ -1,7 +1,10 @@
+import logging
 import uuid
 import jwt
 from datetime import timedelta, datetime
 import json
+
+logger = logging.getLogger(__name__)
 
 from django.shortcuts import get_object_or_404
 from django.conf import settings
@@ -300,7 +303,7 @@ def send_resume_for_screening(resume):
     passed_any = False
 
     if not score_result or 'error' in score_result:
-        print(f"Gemini scoring failed for {resume.email}: {score_result}")
+        logger.warning("Gemini scoring failed for %s: %s", resume.email, score_result)
         return screening_results
 
     for position, result in score_result.items():
@@ -891,7 +894,7 @@ def _safe_send_application_hold_email(resume, hold_until, *, context='assessment
         )
         return True
     except Exception as exc:
-        print(f"Failed to send application hold email to {resume.email}: {exc}")
+        logger.warning("Failed to send application hold email to %s: %s", resume.email, exc)
         return False
 
 
@@ -1031,19 +1034,24 @@ def report_stage_result(request, resume_id):
     if passed is None:
         return Response({'error': "'passed' is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    record, _ = models.VettingPipelineRecord.objects.get_or_create(
-        resume=resume,
-        stage=stage,
-    )
-    record.status = 'passed' if passed else 'failed'
-    record.score = score
-    record.notes = notes
-    if submission_id:
-        try:
-            record.external_submission_id = uuid.UUID(str(submission_id))
-        except (ValueError, AttributeError):
-            pass
-    record.save()
+    with transaction.atomic():
+        record = (
+            models.VettingPipelineRecord.objects
+            .select_for_update()
+            .filter(resume=resume, stage=stage)
+            .first()
+        )
+        if record is None:
+            record = models.VettingPipelineRecord.objects.create(resume=resume, stage=stage)
+        record.status = 'passed' if passed else 'failed'
+        record.score = score
+        record.notes = notes
+        if submission_id:
+            try:
+                record.external_submission_id = uuid.UUID(str(submission_id))
+            except (ValueError, AttributeError):
+                pass
+        record.save()
 
     if passed:
         advance_pipeline(resume, stage)
@@ -1444,8 +1452,6 @@ def report_vetting_tech_result(request, resume_id):
 
 @api_view(['POST'])
 def verify_email(request):
-    print("Trying to find resumes...")
-
     token = request.data.get('token')
     pk = request.data.get('pk')
 
@@ -1778,13 +1784,9 @@ def assign_soft_skills_assessment_appointment(request, freelancer_id):
 
         # Find available interviewers for the soft skills assessment
         available_interviewers = get_available_interviewers("soft_skills")
-        print("Available interviewers found:", available_interviewers)
 
         if available_interviewers:
-            print("Trying to get available appointment dates...")
-            # Generate appointment date options
             appointment_date_options = generate_appointment_date_options(available_interviewers)
-            print("Available appointment dates found:", appointment_date_options)
 
             # Create an appointment with the generated date options
             appointment = models.Appointment.objects.create(
@@ -1847,13 +1849,9 @@ def assign_live_assessment_appointment(request, freelancer_id):
 
         # Find available interviewers for the soft skills assessment
         available_interviewers = get_available_interviewers("live_interview")
-        print("Available interviewers found:", available_interviewers)
 
         if available_interviewers:
-            print("Trying to get available appointment dates...")
-            # Generate appointment date options
             appointment_date_options = generate_appointment_date_options(available_interviewers)
-            print("Available appointment dates found:", appointment_date_options)
 
             # Create an appointment with the generated date options
             appointment = models.Appointment.objects.create(
@@ -1951,7 +1949,7 @@ class FullAssessmentViewSet(viewsets.ModelViewSet):
             message = f"you have passed depth skill assessment for {instance.applied_position.name}."
         if "on_hold" in request.data:
             on_hold_duration = request.data.get("on_hold_duration")
-            message = f"unfortunatelly you have failed the depth skill assessment for {instance.applied_position.name} and you will have to wait {on_hold_duration} to take the assessment again"
+            message = f"unfortunately you have failed the depth skill assessment for {instance.applied_position.name} and you will have to wait {on_hold_duration} to take the assessment again"
         self.send_assessment_update_email(instance , message)
 
         return Response(serializer.data)
@@ -1967,8 +1965,7 @@ class FullAssessmentViewSet(viewsets.ModelViewSet):
                 </body>
                 </html>
                 """
-        send_email(assessment.freelancer.email,subject,html_content)        
-        print("Email sent successfully.")
+        send_email(assessment.freelancer.email, subject, html_content)
 
 
 class FreelancerFullAssessmentView(APIView):
@@ -2012,7 +2009,7 @@ class FullAssessmentUpdateView(APIView):
        
         if "on_hold" in request.data:
             on_hold_duration = request.data.get("on_hold_duration")
-            message = f"unfortunatelly you have failed the live interview assessment and you will have to wait {on_hold_duration} to take the assessment again"
+            message = f"unfortunately you have failed the live interview assessment and you will have to wait {on_hold_duration} to take the assessment again"
         elif "live_assessment_status" in request.data:
             message = f"you have passed live interview assessment."
         freelancer = models.Freelancer.objects.get(pk=freelancer_id)
@@ -2020,7 +2017,7 @@ class FullAssessmentUpdateView(APIView):
         return Response(updated_assessments, status=status.HTTP_200_OK)
 
 
-def send_assessment_update_email(self, freelancer , message):
+def send_assessment_update_email(freelancer, message):
         """Send an email notification when the assessment status is updated."""
         subject = 'Assessment Update Notification'
         message_ = f'Dear {freelancer.full_name},\n\n {message}".\n\nThank you for your continued efforts.'
@@ -2031,8 +2028,7 @@ def send_assessment_update_email(self, freelancer , message):
                 </body>
                 </html>
                 """
-        send_email(freelancer.email,subject,html_content)        
-        print("Email sent successfully.")
+        send_email(freelancer.email, subject, html_content)
 
 
 def get_available_interviewers(type):
@@ -2097,7 +2093,6 @@ def generate_appointment_date_options(interviewers):
 
             # Generate potential appointment slots within working hours for each day of the week
             for single_day in range(7):
-                print("day",single_day)
                 current_day = start_of_week + timedelta(days=single_day)
                 
                 # Create datetime objects for the start and end of working hours
@@ -2121,8 +2116,6 @@ def generate_appointment_date_options(interviewers):
                 # If the interviewer has availability this week and today, check the appointment time
                 if (interviews_this_week < interviewer.interviews_per_week and
                     interviews_today < interviewer.max_interviews_per_day):
-                    # Check if the appointment time falls within the working hours
-                    print("passed check")
                     if appointment_start < appointment_end:  # Valid working hours
                         date_options.append({
                             "interviewer_id":interviewer.id,

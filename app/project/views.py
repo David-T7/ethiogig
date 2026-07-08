@@ -1,58 +1,55 @@
-from rest_framework import viewsets, generics, status
+import logging
+from decimal import Decimal, InvalidOperation
+
+from rest_framework import viewsets, generics, status, permissions
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.exceptions import PermissionDenied, MethodNotAllowed
+from rest_framework.exceptions import PermissionDenied, MethodNotAllowed, ValidationError
 from project import serializers
 from core import models
 from rest_framework.views import APIView
 from django.utils import timezone
 from django.db.models import Count, Q, F
 from datetime import timedelta
-from rest_framework import permissions
-from rest_framework.exceptions import ValidationError
 from .utils import send_email
+
+logger = logging.getLogger(__name__)
+
+CONTRACT_STATUS_TRANSITIONS = {
+    'draft':           {'pending', 'canceled'},
+    'pending':         {'draft', 'canceled'},
+    'accepted':        {'active', 'canceled'},
+    'active':          {'completed', 'inDispute'},
+    'pendingApproval': {'completed', 'active'},
+    'completed':       set(),
+    'canceled':        set(),
+    'inDispute':       set(),
+}
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """View for managing projects of a client"""
-    queryset = models.Project.objects.all()
     serializer_class = serializers.ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        return models.Project.objects.filter(client=self.request.user.client)
+
     def perform_create(self, serializer):
-        """Create a project for a client"""
-        client = models.Client.objects.get(email=self.request.user.email)
-        
-        # Check if a project with the same title already exists for the client
+        client = self.request.user.client
         if models.Project.objects.filter(client=client, title=serializer.validated_data['title']).exists():
             raise ValidationError({"title": "Title already used."})
-        
         serializer.save(client=client)
 
-    def list(self, request, *args, **kwargs):
-        """List projects created by clients"""
-        queryset = self.filter_queryset(self.get_queryset().filter(client=self.request.user.client))
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, *args, **kwargs):
-        """Retrieve a single project created by a client"""
-        instance = self.get_object()
-        serializer = self.get_serializer(instance)
-        return Response(serializer.data)
-
     def perform_update(self, serializer):
-        """Update a project for a client"""
-        # Get the current project instance
         instance = self.get_object()
-        client = models.Client.objects.get(email=self.request.user.email)
-        
-        # Check if another project with the same title exists for the client (excluding the current instance)
-        if models.Project.objects.filter(client=client, title=serializer.validated_data['title']).exclude(id=instance.id).exists():
+        client = self.request.user.client
+        if models.Project.objects.filter(
+            client=client, title=serializer.validated_data['title']
+        ).exclude(id=instance.id).exists():
             raise ValidationError({"title": "Title already used by another project."})
-        
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -150,16 +147,15 @@ class ContractViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to update freelancer_accepted_terms.")
         if request.user.client != instance.client:
             raise PermissionDenied("You do not have permission to update this contract.")
-        
-        # if 'status' in request.data and request.data['status'] == 'active':
-        #     escrows = models.Escrow.objects.filter(contract = instance)
-        #     if escrows.__len__()>0:
-        #         if instance.is_escrow_fulfilled():
-        #             instance.start_project()
-        #             request.data['status'] = 'in_progress'
-        #         else:
-        #             return Response({'status': 'Escrow not fulfilled'}, status=status.HTTP_400_BAD_REQUEST)
 
+        new_status = request.data.get('status')
+        if new_status and new_status != instance.status:
+            allowed = CONTRACT_STATUS_TRANSITIONS.get(instance.status, set())
+            if new_status not in allowed:
+                return Response(
+                    {'error': f"Cannot transition contract from '{instance.status}' to '{new_status}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -204,11 +200,21 @@ class ContractViewSet(viewsets.ModelViewSet):
 
 
 class ContractListView(generics.RetrieveAPIView):
-    """View for getting the list of contracts"""
-    queryset = models.Contract.objects.all()
+    """View for getting a single contract — scoped to the authenticated user's own contracts."""
     serializer_class = serializers.ContractSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        qs = models.Contract.objects.none()
+        if user_client:
+            qs = qs | models.Contract.objects.filter(client=user_client)
+        if user_freelancer:
+            qs = qs | models.Contract.objects.filter(freelancer=user_freelancer)
+        return qs
 
 
 class FreelancerContractViewSet(generics.RetrieveUpdateAPIView):
@@ -361,18 +367,41 @@ class CounterOfferViewSet(viewsets.ModelViewSet):
 
 
 class MileStoneViewSet(viewsets.ModelViewSet):
-    """Viewset for managing disputes between client and freelancer"""
-    queryset = models.Milestone.objects.all()
     serializer_class = serializers.MilestoneSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        if user_client:
+            return models.Milestone.objects.filter(contract__client=user_client)
+        if user_freelancer:
+            return models.Milestone.objects.filter(contract__freelancer=user_freelancer)
+        return models.Milestone.objects.none()
+
+    def perform_create(self, serializer):
+        contract = serializer.validated_data.get('contract')
+        user_client = getattr(self.request.user, 'client', None)
+        if not user_client or contract.client != user_client:
+            raise PermissionDenied('You do not own this contract.')
+        serializer.save()
+
 class CounterOfferMileStoneViewSet(viewsets.ModelViewSet):
-    """Viewset for managing disputes between client and freelancer"""
-    queryset = models.CounterOfferMilestone.objects.all()
     serializer_class = serializers.CounterOfferMilestoneSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        if user_client:
+            return models.CounterOfferMilestone.objects.filter(counter_offer__contract__client=user_client)
+        if user_freelancer:
+            return models.CounterOfferMilestone.objects.filter(counter_offer__contract__freelancer=user_freelancer)
+        return models.CounterOfferMilestone.objects.none()
 
 class CounterOfferViewSet(viewsets.ViewSet):
     authentication_classes = [JWTAuthentication]
@@ -423,9 +452,7 @@ class FreelancerMilestoneByProjectView(generics.ListAPIView):
     def get_queryset(self):
         # Get project_id from the URL kwargs
         project_id = self.kwargs.get('project_id')
-        print("freelancer is",self.request.user.freelancer)
-        # Filter contracts by project_id
-        contracts = models.Contract.objects.filter(project_id=project_id , freelancer=self.request.user.freelancer)
+        contracts = models.Contract.objects.filter(project_id=project_id, freelancer=self.request.user.freelancer)
 
         # Return milestones related to the contracts of the given project
         return models.Milestone.objects.filter(contract__in=contracts)
@@ -475,18 +502,35 @@ class FreelancerContractByProjectView(generics.ListAPIView):
 
 
 class CounterOfferView(viewsets.ModelViewSet):
-    """Viewset for managing disputes between client and freelancer"""
-    queryset = models.CounterOffer.objects.all()
     serializer_class = serializers.CounterOfferSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        if user_client:
+            return models.CounterOffer.objects.filter(contract__client=user_client)
+        if user_freelancer:
+            return models.CounterOffer.objects.filter(contract__freelancer=user_freelancer)
+        return models.CounterOffer.objects.none()
+
 class DisputeViewSet(viewsets.ModelViewSet):
     """Viewset for managing disputes between client and freelancer"""
-    queryset = models.Dispute.objects.all()
     serializer_class = serializers.DisputeSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        if user_client:
+            return models.Dispute.objects.filter(contract__client=user_client)
+        if user_freelancer:
+            return models.Dispute.objects.filter(contract__freelancer=user_freelancer)
+        return models.Dispute.objects.none()
 
     def perform_create(self, serializer):
         """Create a dispute, setting the client, freelancer, and created_by fields automatically"""
@@ -494,7 +538,20 @@ class DisputeViewSet(viewsets.ModelViewSet):
         milestone = serializer.validated_data.get('milestone', None)
         return_type = serializer.validated_data.get('return_type')
         user = self.request.user
-        print("return type is ",return_type)
+
+        if models.Dispute.objects.filter(
+            contract=contract, milestone=milestone, status='open'
+        ).exists():
+            raise ValidationError('An open dispute already exists for this contract.')
+
+        return_amount = serializer.validated_data.get('return_amount')
+        if return_type != 'full' and return_amount is not None:
+            max_amount = milestone.amount if milestone else contract.amount_agreed
+            if return_amount <= 0 or return_amount > max_amount:
+                raise ValidationError(
+                    {'return_amount': f'Must be greater than 0 and at most {max_amount}.'}
+                )
+
         # Determine if the user is a client or freelancer associated with the contract
         try:
             # Safely retrieve `client` and `freelancer` attributes if they exist
@@ -547,13 +604,10 @@ class DisputeViewSet(viewsets.ModelViewSet):
             # Call send_email function with the recipient email, subject, and HTML content
             send_email(dispute_reciever.email , subject, html_content)
         except PermissionError as e:
-            # Handle the case where the user is neither a client nor a freelancer in this contract
-            print(f"PermissionError: {e}")
             raise PermissionError("You are not authorized to initiate a dispute for this contract.")
 
         except Exception as e:
-            # General exception handling
-            print(f"An unexpected error occurred: {e}")
+            logger.exception("Unexpected error creating dispute")
             raise Exception("An error occurred while creating the dispute. Please try again later.")
         if milestone:
             milestone.status = "inDispute"
@@ -596,29 +650,41 @@ class DisputeViewSet(viewsets.ModelViewSet):
                     dispute=instance
                 )
                 instance.supporting_documents.add(supporting_document)
+        return_amount = request.data.get('return_amount')
+        if return_amount is not None and return_type != 'full':
+            try:
+                ra = Decimal(str(return_amount))
+            except InvalidOperation:
+                raise ValidationError({'return_amount': 'Invalid amount.'})
+            max_amount = instance.milestone.amount if instance.milestone else instance.contract.amount_agreed
+            if ra <= 0 or ra > max_amount:
+                raise ValidationError(
+                    {'return_amount': f'Must be greater than 0 and at most {max_amount}.'}
+                )
+
         milestone = None
-        if return_type and return_type=="full":
-            contract = models.Contract.objects.get(pk = instance.contract.id)
-            if(instance.milestone):
-                milestone = models.Milestone.objects.get(pk = instance.milestone.id)
-            if (milestone):
-                instance.return_amount= milestone.amount
+        if return_type and return_type == 'full':
+            contract = models.Contract.objects.get(pk=instance.contract.id)
+            if instance.milestone:
+                milestone = models.Milestone.objects.get(pk=instance.milestone.id)
+            if milestone:
+                instance.return_amount = milestone.amount
             else:
-                instance.return_amount= contract.amount_agreed
+                instance.return_amount = contract.amount_agreed
             instance.save()
 
         if 'status' in request.data:
-            print("checking status .....")
-            print("contract id is ",instance.contract.id)
-            contract = models.Contract.objects.get(pk = instance.contract.id)
-            if(instance.milestone):
-                milestone = models.Milestone.objects.get(pk = instance.milestone.id)
-            if (request.data.get('status') == 'resolved' or request.data.get('status') == 'cancelled'):
-                if (milestone):
-                    milestone.status = "active"
+            contract = models.Contract.objects.get(pk=instance.contract.id)
+            if instance.milestone:
+                milestone = models.Milestone.objects.get(pk=instance.milestone.id)
+            new_status = request.data.get('status')
+            if new_status in ('resolved', 'cancelled'):
+                if milestone:
+                    milestone.status = 'active'
                     milestone.save()
-                contract.status = "active"
+                contract.status = 'active'
                 contract.save()
+                models.DrcForwardedDisputes.objects.filter(dispute=instance).update(solved=True)
         return super().update(request, *args, **kwargs)
 
 class DisputeResponseViewSet(viewsets.ModelViewSet):
@@ -635,6 +701,16 @@ class DisputeResponseViewSet(viewsets.ModelViewSet):
         return_type = serializer.validated_data.get('return_type')
 
         user = self.request.user
+
+        return_amount = serializer.validated_data.get('return_amount')
+        if return_type != 'full' and return_amount is not None:
+            milestone = dispute.milestone
+            max_amount = milestone.amount if milestone else dispute.contract.amount_agreed
+            if return_amount <= 0 or return_amount > max_amount:
+                raise ValidationError(
+                    {'return_amount': f'Must be greater than 0 and at most {max_amount}.'}
+                )
+
         try:
             user_client = getattr(user, 'client', None)
             user_freelancer = getattr(user, 'freelancer', None)
@@ -684,16 +760,17 @@ class DisputeResponseViewSet(viewsets.ModelViewSet):
             # Call send_email function with the recipient email, subject, and HTML content
             send_email(dispute.created_by.email , subject, html_content)
         except PermissionError as e:
-            # Handle the case where the user is neither a client nor a freelancer in this contract
-            print(f"PermissionError: {e}")
             raise PermissionError("You are not authorized to initiate a dispute for this contract.")
 
         except Exception as e:
-            # General exception handling
-            print(f"An unexpected error occurred: {e}")
+            logger.exception("Unexpected error creating dispute response")
             raise Exception("An error occurred while creating the dispute response. Please try again later.")
         if dispute_to_respond:
-            dispute_response_ = models.DisputeResponse.objects.get(pk = dispute_to_respond)
+            dispute_response_ = models.DisputeResponse.objects.get(pk=dispute_to_respond)
+            if dispute_response_.dispute_id != dispute.id:
+                raise ValidationError('The cited response does not belong to this dispute.')
+            if dispute_response_.created_by == user:
+                raise ValidationError('You cannot reply to your own response.')
             dispute_response_.got_response = True
             dispute_response_.save()
             if(return_type == "full"):
@@ -732,12 +809,26 @@ class DisputeResponseViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         """Prevent updates to certain fields"""
         instance = self.get_object()
-        return_type = self.request.data.get('return_type',None)
+        return_type = self.request.data.get('return_type', None)
 
         if 'created_by' in request.data or 'client' in request.data or 'freelancer' in request.data:
             raise PermissionDenied("You do not have permission to update these fields.")
-        if(return_type == "full"):
-            if(instance.dispute.milestone):
+
+        return_amount = request.data.get('return_amount')
+        if return_amount is not None and return_type != 'full':
+            try:
+                ra = Decimal(str(return_amount))
+            except InvalidOperation:
+                raise ValidationError({'return_amount': 'Invalid amount.'})
+            milestone = instance.dispute.milestone
+            max_amount = milestone.amount if milestone else instance.dispute.contract.amount_agreed
+            if ra <= 0 or ra > max_amount:
+                raise ValidationError(
+                    {'return_amount': f'Must be greater than 0 and at most {max_amount}.'}
+                )
+
+        if return_type == 'full':
+            if instance.dispute.milestone:
                 instance.return_amount = instance.dispute.milestone.amount
             else:
                 instance.return_amount = instance.dispute.contract.amount_agreed
@@ -913,6 +1004,8 @@ class SupportingDocumentView(viewsets.ModelViewSet):
 class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
     queryset = models.DrcForwardedDisputes.objects.all()
     serializer_class = serializers.DRCFowrwardSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get_least_assigned_manager(self):
         """Select the dispute manager who has the fewest disputes recently or is eligible based on `dispute_per_week`."""
@@ -1000,7 +1093,7 @@ class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
         
         # Call send_email function with the recipient email, subject, and HTML content
         send_email(dispute.created_by.email , subject, html_content)
-        send_email(manager.email , "Dispute Frorwarded to DRC.", html_content)
+        send_email(manager.email , "Dispute Forwarded to DRC.", html_content)
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -1054,36 +1147,43 @@ class MilestoneDisputeListView(generics.ListAPIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class CancelDisputeView(APIView): 
+class CancelDisputeView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def patch(self, request, dispute_id):
         try:
-            # Get the dispute by ID
-            print("Dispute ID is", dispute_id)
-            dispute = models.Dispute.objects.get(id=dispute_id)
-
-            # Update the dispute status to resolved
-            dispute.status = 'resolved'
-            dispute.save()
-            
-            # Get the associated milestone or contract
-            if dispute.milestone:
-                milestone = dispute.milestone
-                milestone.status = 'active'
-                milestone.save()
-            elif dispute.contract:  # Added check to handle cases where there is no milestone
-                contract = dispute.contract
-                contract.status = 'active'
-                contract.save()
-            else:
-                return Response({'error': 'No milestone or contract associated with this dispute'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Return success response
-            return Response({'success': "Dispute Canceled"}, status=status.HTTP_200_OK)
-
+            dispute = models.Dispute.objects.select_related('contract', 'milestone').get(id=dispute_id)
         except models.Dispute.DoesNotExist:
-            return Response({'error': 'Dispute not found'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Dispute not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        user_client = getattr(user, 'client', None)
+        user_freelancer = getattr(user, 'freelancer', None)
+        is_party = (
+            (user_client and user_client == dispute.contract.client) or
+            (user_freelancer and user_freelancer == dispute.contract.freelancer)
+        )
+        if not is_party:
+            return Response({'error': 'You are not a party to this dispute.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if dispute.status != 'open':
+            return Response(
+                {'error': f'Dispute is already {dispute.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        dispute.status = 'cancelled'
+        dispute.save(update_fields=['status'])
+
+        if dispute.milestone:
+            dispute.milestone.status = 'active'
+            dispute.milestone.save(update_fields=['status'])
+        elif dispute.contract:
+            dispute.contract.status = 'active'
+            dispute.contract.save(update_fields=['status'])
+
+        return Response({'status': 'cancelled'}, status=status.HTTP_200_OK)
 
 
 

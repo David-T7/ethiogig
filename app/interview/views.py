@@ -1,5 +1,9 @@
+import logging
+
 from rest_framework.permissions import IsAuthenticated
 from core.models import Appointment, FreelancerInterview, Interviewer
+
+logger = logging.getLogger(__name__)
 from .serializers import AppointmentSerializer, FreelancerInterviewSerializer, InterviewerSerializer , AppointmentDateSelectionSerializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied
@@ -46,21 +50,30 @@ def send_email(to_email, subject, html_content):
         msg.send()
         return 200
     except Exception as e:
-        print("error sending email", str(e))
+        logger.error("error sending email: %s", str(e))
         return str(e)
 
 class FreelancerInterviewViewSet(viewsets.ModelViewSet):
-    queryset = FreelancerInterview.objects.all()
     serializer_class = FreelancerInterviewSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        user = self.request.user
+        if Interviewer.objects.filter(id=user.id).exists():
+            return FreelancerInterview.objects.filter(interviewer=user)
+        if models.Freelancer.objects.filter(id=user.id).exists():
+            return FreelancerInterview.objects.filter(freelancer=user)
+        return FreelancerInterview.objects.none()
+
     def update(self, request, *args, **kwargs):
-        # Retrieve the interview instance being updated
         instance = self.get_object()
-        
-        if not models.Interviewer.objects.filter(id= request.user.id).exists():
+
+        if not Interviewer.objects.filter(id=request.user.id).exists():
             raise PermissionDenied("You do not have permission to update the interview.")
+
+        if instance.interviewer_id != request.user.id:
+            raise PermissionDenied("You are not the assigned interviewer for this interview.")
         # Only the interviewer can update the `passed` and `feedback` fields.
         partial = kwargs.pop('partial', False)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
@@ -74,7 +87,7 @@ class FreelancerInterviewViewSet(viewsets.ModelViewSet):
             notification_description = f"Congratulations you have passed the interview round for {instance.appointment.category} !"
             result = f"Result: Passed"
         else:
-            notification_description = f"Unforutnately you have not passed the interview round for {instance.appointment.category}!Keep working on your skills and try agian!"
+            notification_description = f"Unfortunately you have not passed the interview round for {instance.appointment.category}! Keep working on your skills and try again!"
             result = f"Result: Failed"
         models.Notification.objects.create(
                     user=instance.freelancer,
@@ -132,47 +145,48 @@ class InterviewerViewSet(viewsets.ModelViewSet):
 
 
 class SelectAppointmentDateView(generics.UpdateAPIView):
-    """API view for selecting an appointment date from available options"""
+    """API view for selecting an appointment date from available options."""
     serializer_class = AppointmentDateSelectionSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_object(self):
-        """Retrieve the appointment instance"""
-        # Get the freelancer's appointment based on the request data (e.g., appointment ID)
         appointment_id = self.kwargs.get('pk')
-        return Appointment.objects.get(id=appointment_id, freelancer=self.request.user)
+        return generics.get_object_or_404(
+            Appointment, id=appointment_id, freelancer=self.request.user
+        )
 
-    def perform_update(self, serializer):
-        """Update the appointment with the selected date"""
+    def update(self, request, *args, **kwargs):
         appointment = self.get_object()
-        selected_date = serializer.validated_data['selected_date']
-
-        # Update the appointment with the selected date
-        appointment.appointment_date = selected_date
-        appointment.appointment_date_options = []  # Clear the date options after selection
+        serializer = AppointmentDateSelectionSerializer(
+            data=request.data,
+            context={'appointment': appointment},
+        )
+        serializer.is_valid(raise_exception=True)
+        appointment.appointment_date = serializer.validated_data['selected_date']
+        appointment.appointment_date_options = []
         appointment.save()
-
         return Response({'message': 'Appointment date selected successfully'}, status=status.HTTP_200_OK)
 
 class UpdateAppointmentStatusView(generics.UpdateAPIView):
-    """API view for updating the appointment status"""
+    """API view for updating the appointment status — restricted to the assigned interviewer."""
     serializer_class = AppointmentSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]  # Ensure only interviewers can access
+    permission_classes = [IsAuthenticated]
 
     def get_object(self):
-        """Retrieve the appointment instance"""
+        if not Interviewer.objects.filter(id=self.request.user.id).exists():
+            raise PermissionDenied("You do not have permission to update appointments.")
         appointment_id = self.kwargs.get('pk')
-        return generics.get_object_or_404(Appointment, id=appointment_id)
+        assigned_freelancers = FreelancerInterview.objects.filter(
+            interviewer=self.request.user
+        ).values_list('freelancer_id', flat=True)
+        return generics.get_object_or_404(
+            Appointment, id=appointment_id, freelancer_id__in=assigned_freelancers
+        )
 
     def update(self, request, *args, **kwargs):
-        """Override the update method to set 'done' to True"""
-        if not models.Interviewer.objects.filter(id= request.user.id).exists():
-            raise PermissionDenied("You do not have permission to update the appointment.")
         appointment = self.get_object()
-      
-        # Update the appointment with the selected date
         appointment.done = True
         appointment.save()
         return Response({'message': 'Appointment status updated successfully'}, status=status.HTTP_200_OK)

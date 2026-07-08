@@ -1,29 +1,37 @@
 from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from core.models import FullAssessment
+from rest_framework.permissions import IsAuthenticated, BasePermission, SAFE_METHODS
+from core.models import FullAssessment, Interviewer, FreelancerInterview
 from .serializers import FullAssessmentSerializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.permissions import BasePermission, SAFE_METHODS
 
-class IsInterviewerOrReadOnly(BasePermission):
-    """
-    Custom permission to allow only interviewers to modify, while others can view.
-    """
+
+class IsInterviewer(BasePermission):
+    """Allow write access only to users who are Interviewers."""
 
     def has_permission(self, request, view):
-        # Allow read-only access to all users
         if request.method in SAFE_METHODS:
-            return True
-        # Allow modifications only if the user is authenticated and has the 'interviewer' role
-        return request.user and request.user.is_authenticated and request.user.role == 'interviewer'
+            return request.user and request.user.is_authenticated
+        return (
+            request.user
+            and request.user.is_authenticated
+            and Interviewer.objects.filter(id=request.user.id).exists()
+        )
 
 
 class FullAssessmentViewSet(viewsets.ModelViewSet):
     """
-    A viewset that provides the standard actions for FullAssessment.
-    Only users with the 'interviewer' role can create, update, or delete.
+    Assessments scoped to the authenticated interviewer's assigned freelancers.
+    Only interviewers can write; read is restricted to the same scope.
     """
-    queryset = FullAssessment.objects.all()
     serializer_class = FullAssessmentSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated, IsInterviewerOrReadOnly]
+    permission_classes = [IsAuthenticated, IsInterviewer]
+
+    def get_queryset(self):
+        user = self.request.user
+        if Interviewer.objects.filter(id=user.id).exists():
+            freelancer_ids = FreelancerInterview.objects.filter(
+                interviewer=user
+            ).values_list('freelancer_id', flat=True)
+            return FullAssessment.objects.filter(freelancer_id__in=freelancer_ids)
+        return FullAssessment.objects.none()

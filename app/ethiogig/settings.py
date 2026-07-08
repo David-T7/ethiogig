@@ -131,6 +131,7 @@ CHANNEL_LAYERS = {
 }
 
 CHAPA_SECRET_KEY = os.environ.get('CHAPA_SECRET_KEY', '')
+CHAPA_WEBHOOK_SECRET = os.environ.get('CHAPA_WEBHOOK_SECRET', '')
 CHAPA_BASE_URL = 'https://api.chapa.co/v1'
 
 

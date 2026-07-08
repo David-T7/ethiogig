@@ -5,6 +5,8 @@ POST /api/payments/escrow/{escrow_id}/initialize/   — client initiates payment
 GET  /api/payments/escrow/{escrow_id}/verify/       — verify & confirm escrow deposit
 POST /api/payments/webhook/                         — Chapa server-to-server callback
 """
+import hashlib
+import hmac
 import json
 import logging
 
@@ -22,6 +24,16 @@ from . import chapa as chapa_client
 logger = logging.getLogger(__name__)
 
 TX_REF_PREFIX = 'ethiogig-escrow-'
+
+
+def _verify_chapa_signature(request):
+    """Return True if the Chapa webhook signature is valid (or no secret is configured)."""
+    secret = getattr(settings, 'CHAPA_WEBHOOK_SECRET', '')
+    if not secret:
+        return True  # skip in dev when secret not configured
+    sig = request.META.get('HTTP_X_CHAPA_SIGNATURE', '')
+    expected = hmac.new(secret.encode(), request.body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
 
 
 def _tx_ref(escrow_id):
@@ -48,9 +60,12 @@ class InitializeEscrowPaymentView(APIView):
             return Response({'error': 'Escrow already funded.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            Client.objects.get(pk=request.user.pk)
+            client = Client.objects.get(pk=request.user.pk)
         except Client.DoesNotExist:
             return Response({'error': 'Only clients can fund escrows.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if escrow.contract.client != client:
+            return Response({'error': 'This escrow does not belong to your contract.'}, status=status.HTTP_403_FORBIDDEN)
 
         user = request.user
         first_name = getattr(user, 'first_name', '') or 'Client'
@@ -110,6 +125,10 @@ class ChapaWebhookView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        if not _verify_chapa_signature(request):
+            logger.warning('Chapa webhook received with invalid signature')
+            return Response({'error': 'Invalid signature.'}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             payload = json.loads(request.body)
         except (json.JSONDecodeError, TypeError):

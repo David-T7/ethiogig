@@ -1,16 +1,16 @@
 import json
 from core.models import Freelancer, Technology, Services
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from user.serializers import FreelancerSerializer
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework import viewsets, status, generics
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework import viewsets, status, generics, permissions
 from .serializers import TechnologySerializer, ServicesSerializer, SkillSearchSerializer
 from core.models import SkillSearch
 from django.utils import timezone
 from django.db.models import F
 from datetime import timedelta
-from rest_framework import permissions
 
 
 def _parse_skills(skills_field):
@@ -71,10 +71,17 @@ def _score_freelancer(freelancer, tech_stack_lower, working_preference):
 
 
 class FreelancerSearchView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         working_preference = request.query_params.get('working_preference', '')
         tech_stack_json = request.query_params.get('tech_stack', '')
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+            page_size = min(max(1, int(request.query_params.get('page_size', 20))), 100)
+        except (TypeError, ValueError):
+            page, page_size = 1, 20
 
         try:
             tech_stack = json.loads(tech_stack_json) if tech_stack_json else []
@@ -83,24 +90,29 @@ class FreelancerSearchView(APIView):
 
         tech_stack_lower = [s.lower() for s in tech_stack]
 
-        freelancers = Freelancer.objects.all()
+        freelancers = Freelancer.objects.filter(availability_status='Available')
         ranked = []
 
         for freelancer in freelancers:
-            # When a required tech stack is given, skip freelancers with zero matching skills
             if tech_stack_lower:
                 verified = set(_parse_skills(freelancer.skills))
                 if not verified & set(tech_stack_lower):
                     continue
-
             score = _score_freelancer(freelancer, tech_stack_lower, working_preference)
             ranked.append((score, freelancer))
 
         ranked.sort(key=lambda x: x[0], reverse=True)
-        top_freelancers = [f for _, f in ranked]
+        total = len(ranked)
+        start = (page - 1) * page_size
+        page_results = [f for _, f in ranked[start:start + page_size]]
 
-        serializer = FreelancerSerializer(top_freelancers, many=True)
-        return Response({'freelancers': serializer.data})
+        serializer = FreelancerSerializer(page_results, many=True)
+        return Response({
+            'freelancers': serializer.data,
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+        })
 
 
 class TechnologyViewSet(viewsets.ReadOnlyModelViewSet):

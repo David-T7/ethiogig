@@ -500,7 +500,7 @@ class Milestone(models.Model):
         choices=[
             ('pending', 'Pending'),
             ('accepted', 'accepted'),
-            ('inDsipute', 'InDispute'),
+            ('inDispute', 'InDispute'),
             ('pendingApproval', 'Pending Approval'),
             ('active', 'Active'),
             ('completed', 'Completed'),
@@ -521,6 +521,13 @@ class Milestone(models.Model):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        self.is_completed = (self.status == 'completed')
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'status' in update_fields and 'is_completed' not in update_fields:
+            kwargs['update_fields'] = list(update_fields) + ['is_completed']
+        super().save(*args, **kwargs)
 
     def clean(self):
         if self.due_date < timezone.now():

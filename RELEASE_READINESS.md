@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-07-07  
+**Last updated:** 2026-07-08  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 **Current focus (June 2026):** Theoretical test MVP smoke path. Use admin **Screening configs** bypass toggles for local QA without Gemini, KYC (8005), or surveillance (8003). Full pipeline (practical, KYC, proctoring) remains implemented but deferred for sign-off.
@@ -299,6 +299,56 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 
 - Partial cancellation (cancel one milestone, not whole contract)
 - Automated refund retry — deferred pending Chapa idempotency confirmation (risk of double-refund without it); `RefundFailed` escrows handled manually via admin
+
+---
+
+## Security audit — 2026-07-08
+
+Full read-only audit of all 6 services followed by systematic fixes. All critical and high severity issues resolved.
+
+### Main backend (8000)
+
+| Fix | Area |
+|-----|------|
+| Row-level scoping via `get_queryset()` on `ProjectViewSet`, `ContractListView`, `MileStoneViewSet`, `CounterOfferMileStoneViewSet`, `CounterOfferView`, `DisputeViewSet`, `DisputeResponseViewSet` | Data leakage |
+| Contract status transition guard (`CONTRACT_STATUS_TRANSITIONS`) | Logic integrity |
+| Duplicate dispute prevention + `return_amount` validation | Dispute correctness |
+| `CancelDisputeView`: wrong status (`resolved` → `cancelled`), added auth + ownership | Bug + auth |
+| DRC cleanup on dispute resolve | Bug |
+| Chapa webhook HMAC-SHA256 signature verification | Payment security |
+| Escrow ownership check in `InitializeEscrowPaymentView` | Auth |
+| `FreelancerInterviewViewSet`: unscoped queryset + update ownership check | Data leakage + auth |
+| `UpdateAppointmentStatusView`: scoped to interviewer's assigned freelancers | Auth |
+| `SelectAppointmentDateView`: serializer context fix (was silently skipping date validation) | Bug |
+| `VerifyFreelancerSkillsView`: scoped to assigned freelancer | Auth |
+| `FullAssessmentViewSet`: replaced broken `IsInterviewerOrReadOnly` + added `get_queryset()` | Auth + data leakage |
+| `MessageViewSet`, `MarkMessagesAsReadView`, `ChatBetweenClientFreelancerView`, `FreelancerChatListView`, `ClientChatListView`: all scoped to authenticated user | Data leakage |
+| `report_stage_result()`: race condition fixed with `select_for_update()` + `transaction.atomic()` | Race condition |
+| `Milestone.is_completed` kept in sync with `status` via `save()` override | Data integrity |
+| `send_assessment_update_email(self, ...)` spurious `self` removed (would crash callers) | Bug |
+| 40+ `print()` statements removed across `user/views.py`, `resume/views.py`, `interview/views.py` | Info disclosure |
+| Typos in user-facing strings fixed | Polish |
+| `logging` added to all modified view modules | Observability |
+
+### Microservices (8001 / 8002 / 8003 / 8005)
+
+| Fix | Affected services |
+|-----|-------------------|
+| `IndexError` crash on malformed `Authorization` header in `CustomJWTAuthentication` + `TokenPayloadPermission` — DoS vector | All 4 |
+| Raw JWT access token printed to stdout | All 4 |
+| `_freelancer_id(request)` helper: always read identity from verified JWT, never from request body | All 4 |
+| `SkillTestSubmissionViewSet`: unscoped queryset + `partial_update()` ownership check + `transaction.atomic()` on scoring | 8001 |
+| `BulkCreateSkillTestAnswerView`: verify submission belongs to caller | 8001 |
+| `SkillTestQuestionViewSet` / `SkillTestOptionViewSet`: converted to `ReadOnlyModelViewSet`; scoped to tests the candidate already submitted (prevents pre-test cheating via `is_correct` field) | 8001 |
+| `SkillTestAnswerViewSet`: scoped to caller's own answers | 8001 |
+| `TestSubmissionViewSet`: unscoped queryset fixed; `submit_answer` / `finalize_submission` ownership checks | 8002 |
+| `FollowUpTestSubmissionViewSet`: unscoped queryset fixed; `submit_followUp_answer` ownership + `freelancer_id` from JWT | 8002 |
+| `SkillTestAnswerView`: submission ownership check | 8002 |
+| `selected_option_id.lower()` AttributeError on `None` fixed | 8002 |
+| `finalize_submission()` wrapped in `transaction.atomic()` | 8002 |
+| `FetchAndStoreProfilePictureView`, `VerifySnapshotView`, `UpdateProfilePictureView`: `freelancer_id` from JWT | 8003 |
+| All KYC views (`VerifyIDView`, `VerifyPassportView`, `FaceMatchingView`, `SmileDetectionView`, `HeadRotationRightView`, `HeadRotationLeftView`, `UpdateUserImageView`): `freelancer_id` from JWT | 8005 |
+| Typo fixes in error messages + 35+ print statements removed | 8005 |
 
 ---
 
