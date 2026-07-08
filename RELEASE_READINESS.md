@@ -259,6 +259,7 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 | `CancelContractView` — **blocks cancellation of `active` contracts**; escrow loop wrapped in `select_for_update` + `transaction.atomic()` to prevent double-refund race | Done |
 | `FreelancerCancelContractView` — freelancer cancels `pending`/`accepted` contract when no escrow is funded; deletes unfunded escrows, notifies both parties | Done (`POST /api/contracts/<id>/freelancer-cancel/`) |
 | `ApproveMilestoneView` — client approves `pendingApproval` milestone; triggers `escrow.release()` → Chapa payout; auto-closes contract when all milestones complete | Done (`POST /api/milestones/<id>/approve/`) |
+| `CancelMilestoneView` — client cancels single milestone (`pending`/`accepted` only); refunds funded escrow via Chapa or deletes unfunded; blocks on open dispute | Done (`POST /api/milestones/<id>/cancel/`) |
 | `ContractViewSet.update()` — auto-calls `escrow.release()` when non-milestone contract set to `completed` | Done |
 | `Escrow` registered in Django admin with status filter — `RefundFailed` escrows visible for manual action | Done |
 | `MilestoneSerializer.validate()` — sum of milestone amounts ≤ `contract.amount_agreed` | Done |
@@ -297,7 +298,7 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 
 ### Pending / not yet implemented
 
-- Partial cancellation (cancel one milestone, not whole contract)
+- ~~Partial cancellation~~ — `CancelMilestoneView` (`POST /api/milestones/<id>/cancel/`) — Done
 - Automated refund retry — deferred pending Chapa idempotency confirmation (risk of double-refund without it); `RefundFailed` escrows handled manually via admin
 
 ---
