@@ -1350,6 +1350,83 @@ class ApproveMilestoneView(APIView):
         return Response({'status': 'completed'}, status=status.HTTP_200_OK)
 
 
+class CancelMilestoneView(APIView):
+    """
+    POST /api/milestones/{id}/cancel/
+
+    Client cancels a single milestone without cancelling the whole contract.
+    Only allowed before work has started (pending or accepted status).
+    If the milestone's escrow is funded, a Chapa refund is initiated.
+    If unfunded, the escrow row is deleted.
+    The contract remains active — other milestones are unaffected.
+
+    Rules:
+    - Must be the client on this contract.
+    - Milestone must be pending or accepted (not active/in-progress).
+    - No open dispute on this milestone.
+    - Milestone must not already be completed or cancelled.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        milestone = models.Milestone.objects.filter(pk=pk).select_related('contract').first()
+        if not milestone:
+            return Response({'error': 'Milestone not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            client = models.Client.objects.get(pk=request.user.pk)
+        except models.Client.DoesNotExist:
+            return Response({'error': 'Only clients can cancel milestones.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if milestone.contract.client != client:
+            return Response({'error': 'You do not own this contract.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if milestone.status in ('completed', 'cancelled'):
+            return Response(
+                {'error': f'Milestone is already {milestone.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if milestone.status in ('active', 'pendingApproval', 'inDispute'):
+            return Response(
+                {'error': 'Work has already started on this milestone. Open a dispute if you need to exit.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if models.Dispute.objects.filter(
+            contract=milestone.contract, milestone=milestone, status='open'
+        ).exists():
+            return Response(
+                {'error': 'Milestone has an open dispute. Resolve it before cancelling.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        escrow = models.Escrow.objects.filter(
+            contract=milestone.contract, milestone=milestone
+        ).first()
+
+        refund_warning = None
+        if escrow:
+            if escrow.deposit_confirmed and escrow.status == 'Pending':
+                escrow.refund()
+                if escrow.status == 'RefundFailed':
+                    refund_warning = (
+                        f'Chapa refund failed for escrow {escrow.id}. '
+                        'It is marked RefundFailed in admin — manual intervention required.'
+                    )
+            else:
+                escrow.delete()
+
+        milestone.status = 'cancelled'
+        milestone.save(update_fields=['status'])
+
+        response_data = {'status': 'cancelled'}
+        if refund_warning:
+            response_data['refund_warning'] = refund_warning
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 class DepositConfirmedUpdateView(generics.UpdateAPIView):
     """Partial update for deposit_confirmed field"""
     queryset = models.Escrow.objects.all()
