@@ -98,6 +98,23 @@ PIPELINE_STAGES = [
 | POST | `/api/resumes/confirm-email-change/` | Public | Body: `token`, `new_email` → sets unverified + sends verify email |
 | POST | `/api/resumes/{id}/change-password/` | Candidate Bearer + current password | **Legacy** inline change; prefer magic-link flow |
 | POST | `/api/resumes/{id}/pipeline-stage/` | Candidate Bearer | Report stage pass/fail + advance |
+| POST | `/api/resumes/{id}/init-proctor-session/` | Candidate Bearer | Create or return existing `ProctorSession`; auto-assigns least-loaded proctor |
+| GET | `/api/proctor/sessions/` | Proctor SimpleJWT | List active sessions assigned to this proctor |
+| POST | `/api/proctor/sessions/{id}/flag/` | Proctor SimpleJWT | Save a violation note |
+| POST | `/api/proctor/sessions/{id}/terminate/` | Proctor SimpleJWT | End session + place 14-day `ApplicationOnHold` |
+| POST | `/api/proctor/sessions/{id}/complete/` | Proctor SimpleJWT | Mark session completed normally |
+
+**`pipeline-status` response shape:**
+```json
+{
+  "stages": [...],
+  "application_hold": { "active": false },
+  "hold_policy": { "disable_application_holds": false },
+  "testing_policy": { "skip_email_verification": false, ... },
+  "manual_proctoring": { "required": false, "session": null }
+}
+```
+`manual_proctoring.session` is `null` when no pending/active session exists for the candidate.
 
 **URL order:** In `resume/urls.py`, all `resumes/candidate-login/`, `resumes/confirm-*`, and `resumes/<uuid>/…` custom paths must be listed **before** `include(router.urls)` — otherwise `resumes/<pk>/` swallows paths like `candidate-login` (405 on POST).
 
@@ -174,8 +191,13 @@ Helpers: `decode_candidate_action_token()`, `confirm_password_change`, `confirm_
 |---|---|---|
 | `ws/chat/<chat_id>/?token=<jwt>` | `ChatConsumer` | Real-time per-chat messaging |
 | `ws/inbox/?token=<jwt>` | `InboxConsumer` | User-level push; fires when any chat receives a new message |
+| `ws/proctor/<session_id>/?token=<jwt>` | `ProctorSessionConsumer` | WebRTC signaling for manual live proctoring; dual auth — candidate JWT (`role: candidate`) or proctor SimpleJWT |
 
 **Channel layer:** Redis via `channels_redis` (`CHANNEL_LAYERS` in settings). Celery and WebSockets share the same Redis instance.
+
+### `ProctorSessionConsumer` (`user/consumers.py`)
+
+Both candidate and proctor connect to the same URL. On connect the consumer tries candidate JWT first, then falls back to `AccessToken` (SimpleJWT) and checks `Proctor.objects.filter(pk=...).aexists()`. Both parties join group `proctor_<session_id>`. Messages (`offer`, `answer`, `ice-candidate`) are relayed to the other party only (exclude sender). `session-active` from candidate writes `status=active` to DB. `proctor-joined` / `candidate-disconnected` are synthetic events sent on connect/disconnect.
 
 ---
 
@@ -188,6 +210,10 @@ Helpers: `decode_candidate_action_token()`, `confirm_password_change`, `confirm_
 - **`SkillCertificate`** — 365-day skill verification after theory + practical pass.
 - **`ApplicationOnHold`** — email + position + `hold_until`; enforced unless `ScreeningConfig.disable_application_holds`.
 - **`ScreeningResult`** — AI screening scores per position.
+- **`Proctor`** — extends `User` via multi-table inheritance; `max_concurrent_sessions` cap (default 5) used for load balancing. Migration `0117`.
+- **`ProctorSession`** — pairs a `Resume` with a `Proctor` for a given pipeline `stage`. Status machine: `pending → proctor_joined → active → completed / terminated`. Terminate creates a 14-day `ApplicationOnHold`. Migration `0117`.
+- **`ProctorFlag`** — violation note written by proctor during a session (`note`, `flagged_at`). Migration `0117`.
+- **`ScreeningConfig.require_manual_proctoring`** — admin toggle (default `False`). When `True`, `pipeline-status` returns `manual_proctoring.required: true` and candidates must establish a WebRTC session with a proctor before entering any test.
 
 ## Models (contract & payment)
 
@@ -257,7 +283,7 @@ All items implemented. See `RELEASE_READINESS.md` for details.
 8. ✅ **Email uniqueness** — `confirm_email_change` blocks `new_email` if any `Resume` uses it (not just verified ones).
 9. **Deprecate `change_candidate_password`** — legacy endpoint still exists; product uses magic-link flow only. Remove in a future cleanup once confirmed no clients call it.
 
-Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security hardening (planned)”.
+Frontend: token-strip with `replaceState` implemented in `CandidateChangePasswordPage` and `CandidateChangeEmailPage` (mount effect).
 
 ---
 
@@ -276,9 +302,10 @@ Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security ha
 | `disable_application_holds` on ScreeningConfig (admin) | Done |
 | **Testing bypasses** — skip email verify / AI screening / KYC / surveillance (`testing_policy.py`, migrations `0110`–`0111`) | Done |
 | Admin: holds clear actions, Screening config toggles, taxonomy models | Done |
-| Migrations `0106`–`0115` | Run on deploy |
+| Migrations `0106`–`0117` | Run on deploy |
 | Security audit — auth/ownership/race across all 6 services | Done (2026-07-08) |
-| Security: one-time action tokens, rate limits (prod hardening) | Planned |
+| Security: one-time action tokens, rate limits, opaque magic links, TTL split, notification emails | Done (2026-07-08) |
+| Manual live proctoring — `Proctor`, `ProctorSession`, `ProctorFlag` models, 5 REST endpoints, `ProctorSessionConsumer` WebSocket | Done (2026-07-13) |
 | Chapa escrow + payout + refund | Done |
 | `FreelancerBankAccount` + bank-account API | Done |
 | `CancelContractView` + escrow refund on cancel | Done |
@@ -297,8 +324,9 @@ Admin → **Screening configs** (`core.models.ScreeningConfig`):
 | `skip_ai_screening_for_testing` | same | Auto-pass AI screening (no Gemini) |
 | `skip_kyc_for_testing` | same | Auto-pass KYC → invite theoretical test |
 | `disable_surveillance_for_testing` | same + pipeline-status API | Frontend skips camera check / face proctoring |
+| `require_manual_proctoring` | `manual_proctoring_required()` in `testing_policy.py` | When `True`, pipeline-status returns `manual_proctoring.required: true`; candidate must connect to a live proctor via WebRTC before any test. Default `False`. |
 
-`GET /api/resumes/{id}/pipeline-status/` returns `testing_policy` alongside `hold_policy`.
+`GET /api/resumes/{id}/pipeline-status/` returns `testing_policy` and `manual_proctoring` alongside `hold_policy`.
 
 **Theoretical-only E2E smoke passed 2026-06-30.** Contract/payment/chat system implemented (see `RELEASE_READINESS.md` § Contract, Escrow & Payment system).
 
@@ -313,9 +341,12 @@ Admin → **Screening configs** (`core.models.ScreeningConfig`):
 |------|----------|
 | Disable holds (testing) | **Screening configs** → **Disable application holds** |
 | Skip email / AI / KYC / surveillance (QA) | **Screening configs** → bypass checkboxes |
+| Enable manual proctoring | **Screening configs** → **Require manual proctoring** |
 | Clear holds | **Resumes** → **Remove holds + reset on-hold stages** |
 | Edit stages | **Resumes** → **Vetting pipeline stages** inline |
 | Taxonomy | **Vetting stacks**, **Vetting skills**, **Services** (stack inline) |
+| Proctor management | **Proctors** — create/edit proctor accounts; set `max_concurrent_sessions` |
+| Session review | **Proctor sessions** — view status, flags, hold timestamps |
 
 ---
 

@@ -1,6 +1,6 @@
 # EthioGig — Release readiness (vetting MVP)
 
-**Last updated:** 2026-07-08  
+**Last updated:** 2026-07-13  
 **Maturity:** Beta vetting platform — core hire path works; production hardening incomplete.
 
 **Current focus (June 2026):** Theoretical test MVP smoke path. Use admin **Screening configs** bypass toggles for local QA without Gemini, KYC (8005), or surveillance (8003). Full pipeline (practical, KYC, proctoring) remains implemented but deferred for sign-off.
@@ -78,6 +78,7 @@ All default **OFF**. Enable only in local/staging QA — **never in production**
 | **Skip AI screening for testing** | Auto-passes AI screening (no Gemini call). |
 | **Skip KYC for testing** | Auto-passes KYC and invites **theoretical test** (no 8005). |
 | **Disable surveillance for testing** | Frontend skips camera pre-check and in-test face proctoring (no 8003 required). |
+| **Require manual proctoring** | When ON, `pipeline-status` returns `manual_proctoring.required: true`; candidates must connect via WebRTC to a live proctor before any test. Default OFF — keep OFF unless testing the proctoring feature itself. |
 
 **Pipeline status API** exposes flags as `testing_policy`: `{ skip_email_verification, skip_ai_screening, skip_kyc, disable_surveillance }` alongside `hold_policy`.
 
@@ -124,6 +125,7 @@ CandidateVettingProgress.objects.all().delete()
 ResumeCheck.objects.all().delete()
 ApplicationOnHold.objects.all().delete()
 ScreeningResult.objects.all().delete()
+ProctorSession.objects.all().delete()
 Resume.objects.all().delete()
 print('Applicant/vetting data cleared.')
 "
@@ -154,6 +156,7 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] **Security: notification emails** — after `confirm_password_change` and `confirm_email_change`, previous address receives "If this wasn't you, contact support" email
 - [x] **Security: email uniqueness** — `confirm_email_change` blocks any `Resume` using `new_email` (was: only `is_email_verified=True`)
 - [x] **Security: password policy** — minimum length raised to 8 on all three password-set paths (magic-link confirm, legacy direct endpoint, frontend validation)
+- [x] **Manual live proctoring** — `Proctor` (User MTI), `ProctorSession`, `ProctorFlag` models (migration `0117`); `ScreeningConfig.require_manual_proctoring`; 5 REST endpoints; `ProctorSessionConsumer` WebSocket signaling with dual auth; `manual_proctoring_required()` in `testing_policy.py`; `pipeline-status` returns `manual_proctoring` block
 
 ### Frontend (`ethiogurus_frontend` — 3000)
 
@@ -178,6 +181,7 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] Fixed `candidateId` TDZ crash in `TestPage` (moved `useCandidateAuth` above `reportFocusViolation`)
 - [x] **Testing bypass UX** — reads `testing_policy` from pipeline-status; skips camera when `disable_surveillance`; apply page reflects `email_verification_required`
 - [x] **Security: JWT stripped from URL** — `useCandidateAuth` saves token to sessionStorage then `replaceState` removes `?token=` from URL; 8 files updated to never put session JWT in navigation URLs; magic-link pages (`change-password`, `change-email`) strip action token from URL on mount
+- [x] **Manual live proctoring (frontend)** — `CandidateProctorWaitingRoom` (WebRTC offer, camera + screen), `ProctorPage` / `ProctorDashboard` / `ProctorSessionTile` (answer side); `/proctor` route; `CandidateStackHubPage` intercepts `startTest`; `applicationHold.js` returns `manualProctoring`
 
 ### Theoretical tests (`ethiogig-testing` — 8001)
 
@@ -305,6 +309,51 @@ Before release tag: migrate all DBs, run taxonomy sync + link command, seed test
 
 - ~~Partial cancellation~~ — `CancelMilestoneView` (`POST /api/milestones/<id>/cancel/`) — Done
 - Automated refund retry — deferred pending Chapa idempotency confirmation (risk of double-refund without it); `RefundFailed` escrows handled manually via admin
+
+---
+
+## Manual Live Proctoring (2026-07-13)
+
+Human proctor monitors candidates via WebRTC (camera + full screen share) during skills tests. Configurable per admin toggle. One proctor handles multiple candidates simultaneously.
+
+### Backend
+
+| Item | Status |
+|------|--------|
+| `Proctor` model — User MTI, `max_concurrent_sessions` | Done |
+| `ProctorSession` model — status machine `pending → proctor_joined → active → completed / terminated` | Done |
+| `ProctorFlag` model — violation notes | Done |
+| `ScreeningConfig.require_manual_proctoring` toggle | Done |
+| `manual_proctoring_required()` in `testing_policy.py` | Done |
+| `init_proctor_session` — auto-assign least-loaded proctor, idempotent | Done |
+| `ProctorSessionListView` — proctor's active sessions | Done |
+| `FlagProctorSessionView` | Done |
+| `TerminateProctorSessionView` — creates 14-day `ApplicationOnHold`, sends hold email | Done |
+| `CompleteProctorSessionView` | Done |
+| `ProctorSessionConsumer` — WS signaling, dual auth (candidate JWT + proctor SimpleJWT) | Done |
+| `ws/proctor/<session_id>/` route in `user/routing.py` | Done |
+| `pipeline-status` returns `manual_proctoring: { required, session }` | Done |
+| Migration `0117` (Proctor, ProctorSession, ProctorFlag, `require_manual_proctoring`) | Run on deploy |
+| Admin: `ProctorAdmin`, `ProctorSessionAdmin`, `ProctorFlagInline` | Done |
+
+### Frontend
+
+| Item | Status |
+|------|--------|
+| `CandidateProctorWaitingRoom` — `getUserMedia` + `getDisplayMedia`, POST init session, WS connect, WebRTC offer, `onReady()` callback | Done |
+| `ProctorSessionTile` — WS connect as proctor, receive offer, answer, split stream into camera + screen video refs, flag form, terminate confirm | Done |
+| `ProctorDashboard` — polls `/api/proctor/sessions/` every 12 s, grid of tiles, mark-complete button | Done |
+| `ProctorPage` — login form → `proctor_token` in sessionStorage → dashboard | Done |
+| `/proctor` route | Done |
+| `CandidateStackHubPage` intercepts `startTest` when manual proctoring required | Done |
+| `applicationHold.js` — `parsePipelineStatusPayload` returns `manualProctoring`, `isManualProctoringRequired` helper | Done |
+
+### Still to test in a real browser
+
+- [ ] Full WebRTC offer/answer handshake (requires two browser tabs — can't be tested with curl)
+- [ ] Screen share picker appears correctly on candidate side
+- [ ] Proctor's dual video (camera track + screen track) renders without mixing
+- [ ] Terminate → hold email arrives at candidate's address
 
 ---
 
