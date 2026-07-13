@@ -26,9 +26,37 @@ class ScreeningConfigSerializer(serializers.ModelSerializer):
             'skip_ai_screening_for_testing',
             'skip_kyc_for_testing',
             'disable_surveillance_for_testing',
+            'require_manual_proctoring',
             'updated_at',
         ]
         read_only_fields = ['updated_at']
+
+
+class ProctorFlagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ProctorFlag
+        fields = ['id', 'note', 'flagged_at']
+        read_only_fields = ['id', 'flagged_at']
+
+
+class ProctorSessionSerializer(serializers.ModelSerializer):
+    flags = ProctorFlagSerializer(many=True, read_only=True)
+    proctor_name = serializers.SerializerMethodField()
+    candidate_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = models.ProctorSession
+        fields = [
+            'id', 'stage', 'status', 'proctor_name', 'candidate_name',
+            'started_at', 'ended_at', 'created_at', 'flags',
+        ]
+        read_only_fields = fields
+
+    def get_proctor_name(self, obj):
+        return obj.proctor.full_name if obj.proctor else None
+
+    def get_candidate_name(self, obj):
+        return obj.resume.full_name
 
 class FieldSerializer(serializers.ModelSerializer):    
     class Meta:

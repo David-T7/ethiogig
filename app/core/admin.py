@@ -136,3 +136,28 @@ admin.site.register(models.Project)
 admin.site.register(models.Waitlist)
 admin.site.register(models.SignUpList)
 admin.site.register(models.ResumeCheck)
+
+
+class ProctorAdmin(StaffUserAdmin):
+    fieldsets = StaffUserAdmin.fieldsets + (
+        (_('Proctor Details'), {'fields': ('max_concurrent_sessions',)}),
+    )
+    add_fieldsets = StaffUserAdmin.add_fieldsets
+
+
+class ProctorFlagInline(admin.TabularInline):
+    model = models.ProctorFlag
+    extra = 0
+    readonly_fields = ('flagged_at',)
+
+
+class ProctorSessionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'resume', 'proctor', 'stage', 'status', 'created_at')
+    list_filter = ('status', 'stage')
+    readonly_fields = ('id', 'created_at', 'started_at', 'ended_at')
+    inlines = [ProctorFlagInline]
+
+
+admin.site.register(models.Proctor, ProctorAdmin)
+admin.site.register(models.ProctorSession, ProctorSessionAdmin)
+admin.site.register(models.ProctorFlag)

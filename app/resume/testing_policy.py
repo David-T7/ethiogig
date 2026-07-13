@@ -27,6 +27,11 @@ def surveillance_disabled_for_testing():
     return bool(config and config.disable_surveillance_for_testing)
 
 
+def manual_proctoring_required():
+    config = _config()
+    return bool(config and config.require_manual_proctoring)
+
+
 def serialize_testing_policy():
     return {
         'skip_email_verification': skip_email_verification_for_testing(),

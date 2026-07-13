@@ -24,7 +24,8 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import ValidationError, PermissionDenied
-from rest_framework.generics import RetrieveUpdateAPIView
+from rest_framework import generics
+from rest_framework.generics import RetrieveUpdateAPIView, get_object_or_404 as drf_get_object_or_404
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from core import models
@@ -39,6 +40,7 @@ from .testing_policy import (
     skip_ai_screening_for_testing,
     skip_email_verification_for_testing,
     serialize_testing_policy,
+    manual_proctoring_required,
 )
 
 from uuid import UUID
@@ -1103,6 +1105,10 @@ def get_pipeline_status(request, resume_id):
     hold_payload = _serialize_application_hold(hold)
     if hold:
         hold_payload['email'] = resume.email
+    active_session = models.ProctorSession.objects.filter(
+        resume=resume,
+    ).exclude(status__in=['completed', 'terminated']).order_by('-created_at').first()
+
     return Response({
         'stages': serializer.data,
         'application_hold': hold_payload,
@@ -1110,6 +1116,10 @@ def get_pipeline_status(request, resume_id):
             'enforced': application_holds_enabled(),
         },
         'testing_policy': serialize_testing_policy(),
+        'manual_proctoring': {
+            'required': manual_proctoring_required(),
+            'session': serializers.ProctorSessionSerializer(active_session).data if active_session else None,
+        },
     })
 
 
@@ -2290,4 +2300,145 @@ class ApplicationOnHoldViewSet(viewsets.ModelViewSet):
                 reason=rejection_reason,
             )
 
-        
+
+# ---------------------------------------------------------------------------
+# Manual proctoring REST endpoints
+# ---------------------------------------------------------------------------
+
+def _get_least_loaded_proctor():
+    """Return the active Proctor with the fewest pending/active sessions."""
+    return (
+        models.Proctor.objects
+        .annotate(
+            active_sessions=Count(
+                'sessions',
+                filter=Q(sessions__status__in=['pending', 'proctor_joined', 'active']),
+            )
+        )
+        .filter(is_active=True)
+        .order_by('active_sessions')
+        .first()
+    )
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def init_proctor_session(request, resume_id):
+    """
+    Candidate calls this before starting a test when manual proctoring is required.
+    Creates or returns the existing pending/active ProctorSession for the given stage,
+    auto-assigning the least-loaded available proctor.
+    """
+    payload, err = _authenticate_candidate(request, resume_id)
+    if err:
+        return err
+
+    try:
+        resume = models.Resume.objects.get(id=resume_id)
+    except models.Resume.DoesNotExist:
+        return Response({'error': 'Resume not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    stage = request.data.get('stage', 'theoretical_test')
+    if stage not in ('theoretical_test', 'practical_test'):
+        return Response({'error': 'Invalid stage.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    existing = models.ProctorSession.objects.filter(
+        resume=resume, stage=stage,
+    ).exclude(status__in=['completed', 'terminated']).first()
+
+    if existing:
+        return Response(serializers.ProctorSessionSerializer(existing).data)
+
+    proctor = _get_least_loaded_proctor()
+    session = models.ProctorSession.objects.create(
+        resume=resume, proctor=proctor, stage=stage,
+    )
+    return Response(serializers.ProctorSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+
+
+class ProctorSessionListView(generics.ListAPIView):
+    """Proctor's own pending/active sessions."""
+    serializer_class = serializers.ProctorSessionSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not models.Proctor.objects.filter(pk=user.pk).exists():
+            return models.ProctorSession.objects.none()
+        return (
+            models.ProctorSession.objects
+            .filter(proctor_id=user.pk)
+            .exclude(status__in=['completed', 'terminated'])
+            .order_by('-created_at')
+        )
+
+
+class FlagProctorSessionView(APIView):
+    """Proctor raises a violation flag on one of their sessions."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, session_id):
+        session = drf_get_object_or_404(
+            models.ProctorSession, id=session_id, proctor_id=request.user.pk,
+        )
+        note = (request.data.get('note') or '').strip()
+        if not note:
+            return Response({'error': 'Note is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        flag = models.ProctorFlag.objects.create(session=session, note=note)
+        return Response(
+            {'id': str(flag.id), 'flagged_at': flag.flagged_at.isoformat()},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TerminateProctorSessionView(APIView):
+    """Proctor terminates a session and puts the candidate on hold."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, session_id):
+        session = drf_get_object_or_404(
+            models.ProctorSession, id=session_id, proctor_id=request.user.pk,
+        )
+        if session.status in ('completed', 'terminated'):
+            return Response({'error': 'Session already ended.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = (request.data.get('reason') or 'Terminated by proctor during live monitoring').strip()
+
+        session.status = 'terminated'
+        session.ended_at = timezone.now()
+        session.save(update_fields=['status', 'ended_at'])
+
+        hold_days = 14
+        hold_until = timezone.now() + timedelta(days=hold_days)
+        models.ApplicationOnHold.objects.create(
+            resume=session.resume,
+            email=session.resume.email,
+            position=session.resume.applied_position,
+            hold_until=hold_until,
+            reason=reason,
+        )
+        _safe_send_application_hold_email(session.resume, hold_until, reason=reason)
+
+        return Response({'status': 'terminated', 'hold_until': hold_until.isoformat()})
+
+
+class CompleteProctorSessionView(APIView):
+    """Proctor marks a session as completed (candidate finished the test cleanly)."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, session_id):
+        session = drf_get_object_or_404(
+            models.ProctorSession, id=session_id, proctor_id=request.user.pk,
+        )
+        if session.status in ('completed', 'terminated'):
+            return Response({'error': 'Session already ended.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session.status = 'completed'
+        session.ended_at = timezone.now()
+        session.save(update_fields=['status', 'ended_at'])
+        return Response({'status': 'completed'})

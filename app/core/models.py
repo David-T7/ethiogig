@@ -735,6 +735,13 @@ class ScreeningConfig(models.Model):
             'for skills tests (local/testing only).'
         ),
     )
+    require_manual_proctoring = models.BooleanField(
+        default=False,
+        help_text=(
+            'When enabled, a human proctor must be connected and monitoring before '
+            'the candidate can start any skills test.'
+        ),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -1012,3 +1019,53 @@ class CandidateActionToken(models.Model):
 
     def __str__(self):
         return f'{self.purpose} — {self.resume.email} ({"used" if self.used_at else "unused"})'
+
+
+# ---------------------------------------------------------------------------
+# Manual proctoring
+# ---------------------------------------------------------------------------
+
+class Proctor(User):
+    """Staff user who monitors candidates live during skills tests."""
+    full_name = models.CharField(max_length=100)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    max_concurrent_sessions = models.PositiveIntegerField(default=5)
+
+    def __str__(self):
+        return self.full_name
+
+
+class ProctorSession(models.Model):
+    """One live-proctoring session per candidate per test stage."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('proctor_joined', 'Proctor Joined'),
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('terminated', 'Terminated'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    resume = models.ForeignKey('Resume', on_delete=models.CASCADE, related_name='proctor_sessions')
+    proctor = models.ForeignKey(
+        Proctor, on_delete=models.SET_NULL, null=True, blank=True, related_name='sessions',
+    )
+    stage = models.CharField(max_length=50)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'ProctorSession {self.id} — {self.resume.email} [{self.stage}/{self.status}]'
+
+
+class ProctorFlag(models.Model):
+    """A violation note raised by a proctor during a session."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(ProctorSession, on_delete=models.CASCADE, related_name='flags')
+    note = models.TextField()
+    flagged_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'Flag on {self.session_id} at {self.flagged_at}'
