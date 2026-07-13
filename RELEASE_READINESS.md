@@ -147,9 +147,13 @@ Optional: clear theoretical submissions (`8001`) and surveillance profiles (`800
 - [x] Hold notification email + `resend-hold-notification`
 - [x] Migrations `0106`–`0114`
 - [x] Admin: pipeline inlines, holds, screening config toggles
-- [x] **Security: one-time action tokens** — `CandidateActionToken` model (migration `0113`); `generate_candidate_action_token` saves `jti` to DB; `decode_candidate_action_token` validates one-time use with `select_for_update`; replayed links rejected
+- [x] **Security: one-time action tokens** — `CandidateActionToken` model (migration `0113`); `generate_candidate_action_token` saves `jti` to DB; `redeem_candidate_action_token` validates one-time use with `select_for_update`; replayed links rejected
 - [x] **Security: rate limiting** — `_check_action_token_rate_limit` on `request-password-change` and `request-email-change`; max 3 per resume/purpose per hour (DB-based, no extra cache infra)
-- [x] **Security: dedicated `CANDIDATE_ACTION_SECRET_KEY`** — magic-link JWTs (password/email change) now signed with a separate key from `SECRET_KEY`; a leaked session token cannot be crafted into a password-reset link; set via env var in production
+- [x] **Security: opaque magic-link tokens** — magic links now carry a UUID (`jti`) instead of a JWT; no secret key needed; expiry stored in `expires_at` DB field (migration `0116`); `CANDIDATE_ACTION_SECRET_KEY` is now unused
+- [x] **Security: TTL split** — password-change links expire in 1 hour; email-change links expire in 24 hours
+- [x] **Security: notification emails** — after `confirm_password_change` and `confirm_email_change`, previous address receives "If this wasn't you, contact support" email
+- [x] **Security: email uniqueness** — `confirm_email_change` blocks any `Resume` using `new_email` (was: only `is_email_verified=True`)
+- [x] **Security: password policy** — minimum length raised to 8 on all three password-set paths (magic-link confirm, legacy direct endpoint, frontend validation)
 
 ### Frontend (`ethiogurus_frontend` — 3000)
 

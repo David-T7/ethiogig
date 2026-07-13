@@ -243,19 +243,19 @@ Creates/uses test resume, walks stages, validates `PIPELINE_STAGES` alignment wi
 
 ---
 
-## Candidate account security hardening (planned)
+## Candidate account security hardening
 
-MVP magic-link flow is documented above. **Implement before calling production-ready:**
+All items implemented. See `RELEASE_READINESS.md` for details.
 
-1. **One-time tokens** — Persist `jti` (or random id) when issuing action JWT; reject reuse after successful confirm; invalidate previous link when sending a new one.
-2. **Rate limiting** — Throttle `request-*` and `confirm-*` by IP + `resume_id` (django-ratelimit, Redis, or nginx).
-3. **Notification emails** — After `confirm_password_change` and after `confirm_email_change`, email the **previous** address (“If this wasn’t you, contact support”).
-4. **Token transport** — Avoid long JWTs in query strings (referrer/history/logs); prefer opaque DB token or frontend URL fragment.
-5. **Password policy** — Raise minimum length; optional HIBP k-anonymity check.
-6. **TTL split** — Shorter expiry for `change_password` (e.g. 1h) vs `change_email` (24h).
-7. **Signing key** — ✅ Done: `CANDIDATE_ACTION_SECRET_KEY` in `settings.py` (env var); `generate_candidate_action_token` and `decode_candidate_action_token` use this key, not `SECRET_KEY`.
-8. **Email uniqueness** — On confirm, block `new_email` if **any** `Resume` uses it, not only `is_email_verified=True`.
-9. **Deprecate** `change_candidate_password` direct API if product only supports email links.
+1. ✅ **One-time tokens** — `CandidateActionToken.jti` stored in DB; `redeem_candidate_action_token` marks used with `select_for_update`; replayed links rejected.
+2. ✅ **Rate limiting** — `_check_action_token_rate_limit`: max 3 requests per resume/purpose per hour (DB-based).
+3. ✅ **Notification emails** — `_send_account_change_notification_email` sends “if this wasn’t you” email to previous address after password or email change.
+4. ✅ **Token transport** — Magic links carry a UUID (not a JWT); `CANDIDATE_ACTION_SECRET_KEY` is now unused; frontend strips token from URL with `replaceState` on mount.
+5. ✅ **Password policy** — Minimum length raised to 8 on all password-set paths.
+6. ✅ **TTL split** — Password-change links: 1 hour. Email-change links: 24 hours. Stored in `CandidateActionToken.expires_at` (migration `0116`).
+7. ✅ **Signing key** — `CANDIDATE_ACTION_SECRET_KEY` superseded by opaque UUID approach; kept in settings for backward env-var compatibility but not read by code.
+8. ✅ **Email uniqueness** — `confirm_email_change` blocks `new_email` if any `Resume` uses it (not just verified ones).
+9. **Deprecate `change_candidate_password`** — legacy endpoint still exists; product uses magic-link flow only. Remove in a future cleanup once confirmed no clients call it.
 
 Frontend checklist: `my-react-app/CLAUDE.md` § “Candidate account security hardening (planned)”.
 
