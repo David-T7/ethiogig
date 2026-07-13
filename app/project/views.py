@@ -926,11 +926,15 @@ class IsDisputeManager(permissions.BasePermission):
         return request.user.is_authenticated and models.DisputeManager.objects.filter(id=request.user.id).exists()
 
 class ResolvedDrcViewSet(viewsets.ModelViewSet):
-    """Viewset for resolving disputes forwarded to DRC"""
-    queryset = models.DrcResolvedDisputes.objects.all()
+    """Viewset for resolving disputes forwarded to DRC — scoped to the manager's own cases."""
     serializer_class = serializers.DrcResolvedDisputesSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsDisputeManager]
+
+    def get_queryset(self):
+        return models.DrcResolvedDisputes.objects.filter(
+            drc_forwarded__dispute_manager__id=self.request.user.id
+        )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -996,16 +1000,24 @@ class ResolvedDrcViewSet(viewsets.ModelViewSet):
 
 
 class SupportingDocumentView(viewsets.ModelViewSet):
-    queryset = models.SupportingDocument.objects.all()
     serializer_class = serializers.SupportingDocumentSerializer
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return models.SupportingDocument.objects.filter(uploaded_by=self.request.user)
 
 
 class DrcForwardedDisputesViewSet(viewsets.ModelViewSet):
-    queryset = models.DrcForwardedDisputes.objects.all()
     serializer_class = serializers.DRCFowrwardSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if models.DisputeManager.objects.filter(id=user.id).exists():
+            return models.DrcForwardedDisputes.objects.filter(dispute_manager__id=user.id)
+        return models.DrcForwardedDisputes.objects.none()
 
     def get_least_assigned_manager(self):
         """Select the dispute manager who has the fewest disputes recently or is eligible based on `dispute_per_week`."""
@@ -1188,11 +1200,18 @@ class CancelDisputeView(APIView):
 
 
 class EscrowViewSet(viewsets.ModelViewSet):
-    """Viewset for managing escrows"""
-    queryset = models.Escrow.objects.all()
+    """Viewset for managing escrows — scoped to the authenticated user's contracts."""
     serializer_class = serializers.EscrowSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'client'):
+            return models.Escrow.objects.filter(contract__client=user.client)
+        if hasattr(user, 'freelancer'):
+            return models.Escrow.objects.filter(contract__freelancer=user.freelancer)
+        return models.Escrow.objects.none()
 
     def perform_create(self, serializer):
         """Create an escrow, ensuring the contract and potential milestone are valid"""
@@ -1554,11 +1573,15 @@ class EscrowListView(generics.ListCreateAPIView):
     def get_queryset(self):
         contract_id = self.kwargs.get('contract_pk')
         contract = generics.get_object_or_404(models.Contract, pk=contract_id)
-        return self.queryset.filter(contract = contract)
+        user = self.request.user
+        is_client = hasattr(user, 'client') and contract.client == user.client
+        is_freelancer = hasattr(user, 'freelancer') and contract.freelancer == user.freelancer
+        if not is_client and not is_freelancer:
+            raise PermissionDenied("You do not have access to this contract's escrows.")
+        return models.Escrow.objects.filter(contract=contract)
 
 class EscrowMilestoneListView(generics.ListCreateAPIView):
-    """View for listing and creating escrows for a specific contract"""
-    queryset = models.Escrow.objects.all()
+    """View for listing and creating escrows for a specific milestone."""
     serializer_class = serializers.EscrowSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -1566,52 +1589,47 @@ class EscrowMilestoneListView(generics.ListCreateAPIView):
     def get_queryset(self):
         milestone_id = self.kwargs.get('milestone_pk')
         milestone = generics.get_object_or_404(models.Milestone, pk=milestone_id)
-        return self.queryset.filter(milestone = milestone)
+        user = self.request.user
+        contract = milestone.contract
+        is_client = hasattr(user, 'client') and contract.client == user.client
+        is_freelancer = hasattr(user, 'freelancer') and contract.freelancer == user.freelancer
+        if not is_client and not is_freelancer:
+            raise PermissionDenied("You do not have access to this milestone's escrows.")
+        return models.Escrow.objects.filter(milestone=milestone)
 
 class ProjectFreelancersView(APIView):
-    """
-    View to return freelancers associated with a given project.
-    """
+    """Freelancers on a project — accessible by the project's client."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id):
-        try:
-            # Fetch the project by ID
-            project = models.Project.objects.get(id=project_id)
-
-            # Find contracts associated with this project
-            contracts = models.Contract.objects.filter(project=project)
-
-            # Extract freelancers from these contracts
-            freelancers = [contract.freelancer for contract in contracts]
-
-            # Serialize the freelancers
-            serializer = serializers.FreelancerSerializer(freelancers, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except models.Project.DoesNotExist:
-            return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        project = generics.get_object_or_404(models.Project, pk=project_id)
+        if not hasattr(request.user, 'client') or project.client != request.user.client:
+            raise PermissionDenied("You do not have access to this project.")
+        contracts = models.Contract.objects.filter(project=project)
+        freelancers = [c.freelancer for c in contracts]
+        serializer = serializers.FreelancerSerializer(freelancers, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class ProjectMilestonesView(APIView):
-    """
-    View to return milestones associated with a given project.
-    """
+    """Milestones on a project — accessible by the client or any contracted freelancer."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id):
-        try:
-            # Fetch the project by ID
-            project = models.Project.objects.get(id=project_id)
-
-            # Find contracts associated with this project
-            contracts = models.Contract.objects.filter(project=project)
-
-            # Get all milestones related to the contracts of this project
-            milestones = models.Milestone.objects.filter(contract__in=contracts)
-
-            # Serialize the milestones
-            serializer = serializers.MilestoneSerializer(milestones, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except models.Project.DoesNotExist:
-            return Response({"detail": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        project = generics.get_object_or_404(models.Project, pk=project_id)
+        user = request.user
+        is_client = hasattr(user, 'client') and project.client == user.client
+        is_freelancer = hasattr(user, 'freelancer') and models.Contract.objects.filter(
+            project=project, freelancer=user.freelancer
+        ).exists()
+        if not is_client and not is_freelancer:
+            raise PermissionDenied("You do not have access to this project.")
+        contracts = models.Contract.objects.filter(project=project)
+        milestones = models.Milestone.objects.filter(contract__in=contracts)
+        serializer = serializers.MilestoneSerializer(milestones, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class ActiveContractCheckView(APIView):
     """
@@ -1626,7 +1644,12 @@ class ActiveContractCheckView(APIView):
         if not freelancer_id or not client_id:
             return Response({"error": "Both freelancer_id and client_id are required."}, status=400)
 
-        # Check if there's an active contract
+        user = request.user
+        is_the_client = hasattr(user, 'client') and str(user.client.id) == client_id
+        is_the_freelancer = hasattr(user, 'freelancer') and str(user.freelancer.id) == freelancer_id
+        if not is_the_client and not is_the_freelancer:
+            raise PermissionDenied("You can only check contracts you are a party to.")
+
         active_contract = models.Contract.objects.filter(
             freelancer_id=freelancer_id,
             client_id=client_id,

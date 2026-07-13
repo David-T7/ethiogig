@@ -20,7 +20,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -46,6 +46,11 @@ from uuid import UUID
 class ResumeViewSet(viewsets.ModelViewSet):
     queryset = Resume.objects.all()
     serializer_class = serializers.ResumeSerializer
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [AllowAny()]
+        return [IsAuthenticated(), IsAdminUser()]
 
     def create(self, request, *args, **kwargs):
         email = request.data.get('email')
@@ -169,17 +174,13 @@ def generate_candidate_token(resume):
     return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
 
 
-def generate_candidate_action_token(resume_id, purpose):
+def generate_candidate_action_token(resume_id, purpose, hours=24):
     jti = uuid.uuid4()
-    models.CandidateActionToken.objects.create(jti=jti, resume_id=resume_id, purpose=purpose)
-    payload = {
-        'user_id': str(resume_id),
-        'purpose': purpose,
-        'role': 'candidate_action',
-        'jti': str(jti),
-        'exp': datetime.utcnow() + timedelta(hours=24),
-    }
-    return jwt.encode(payload, settings.CANDIDATE_ACTION_SECRET_KEY, algorithm='HS256')
+    expires_at = timezone.now() + timedelta(hours=hours)
+    models.CandidateActionToken.objects.create(
+        jti=jti, resume_id=resume_id, purpose=purpose, expires_at=expires_at,
+    )
+    return str(jti)
 
 
 def _check_action_token_rate_limit(resume_id, purpose, max_per_hour=3):
@@ -190,21 +191,12 @@ def _check_action_token_rate_limit(resume_id, purpose, max_per_hour=3):
     return count >= max_per_hour
 
 
-def decode_candidate_action_token(token, expected_purpose):
-    if not token:
+def redeem_candidate_action_token(token_str, expected_purpose):
+    if not token_str:
         return None, Response({'error': 'Token is required.'}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        payload = jwt.decode(token, settings.CANDIDATE_ACTION_SECRET_KEY, algorithms=['HS256'])
-    except jwt.ExpiredSignatureError:
-        return None, Response({'error': 'This link has expired. Request a new one from your application status page.'}, status=status.HTTP_400_BAD_REQUEST)
-    except jwt.InvalidTokenError:
-        return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    if payload.get('role') != 'candidate_action' or payload.get('purpose') != expected_purpose:
-        return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    jti = payload.get('jti')
-    if not jti:
+        jti = UUID(token_str)
+    except (ValueError, AttributeError):
         return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
 
     with transaction.atomic():
@@ -215,6 +207,13 @@ def decode_candidate_action_token(token, expected_purpose):
                 {'error': 'This link has already been used or is invalid.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if action_token.purpose != expected_purpose:
+            return None, Response({'error': 'Invalid link.'}, status=status.HTTP_400_BAD_REQUEST)
+        if action_token.expires_at < timezone.now():
+            return None, Response(
+                {'error': 'This link has expired. Request a new one from your application status page.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if action_token.used_at is not None:
             return None, Response(
                 {'error': 'This link has already been used. Request a new one from your application status page.'},
@@ -223,23 +222,44 @@ def decode_candidate_action_token(token, expected_purpose):
         action_token.used_at = timezone.now()
         action_token.save(update_fields=['used_at'])
 
-    return payload, None
+    return action_token.resume, None
 
 
-def _send_candidate_account_link_email(resume, subject, path, action_label):
+def _send_candidate_account_link_email(resume, subject, path, action_label, expires_hours=24):
     full_url = f"{settings.FRONTEND_URL}{path}"
+    if expires_hours < 24:
+        expiry_text = f'{expires_hours} hour{"s" if expires_hours != 1 else ""}'
+    else:
+        expiry_text = f'{expires_hours // 24} day{"s" if expires_hours // 24 != 1 else ""}'
     html_content = f"""
     <html>
         <body>
             <p>Hello {resume.full_name},</p>
             <p>You requested to {action_label} for your EthioGurus application.</p>
-            <p>Click the link below to continue. This link expires in 24 hours.</p>
+            <p>Click the link below to continue. This link expires in {expiry_text}.</p>
             <p><a href="{full_url}">{action_label}</a></p>
             <p>If you did not request this, you can ignore this email.</p>
         </body>
     </html>
     """
     send_email(resume.email, subject, html_content)
+
+
+def _send_account_change_notification_email(to_email, full_name, change_type):
+    subject = f'Your EthioGurus application {change_type} was changed'
+    html_content = f"""
+    <html>
+        <body>
+            <p>Hello {full_name},</p>
+            <p>Your application {change_type} was recently changed.</p>
+            <p>If you did not make this change, please contact EthioGurus support immediately.</p>
+        </body>
+    </html>
+    """
+    try:
+        send_email(to_email, subject, html_content)
+    except Exception:
+        logger.exception('Failed to send account change notification to %s', to_email)
 
 
 def _auto_verify_email_for_testing(resumes):
@@ -664,9 +684,9 @@ def change_candidate_password(request, resume_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if len(new_password) < 5:
+    if len(new_password) < 8:
         return Response(
-            {'error': 'New password must be at least 5 characters.'},
+            {'error': 'New password must be at least 8 characters.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -713,12 +733,13 @@ def request_password_change_link(request, resume_id):
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    token = generate_candidate_action_token(resume.id, 'change_password')
+    token = generate_candidate_action_token(resume.id, 'change_password', hours=1)
     _send_candidate_account_link_email(
         resume,
         'Change your application password',
         f'application/change-password?token={token}',
         'change your application password',
+        expires_hours=1,
     )
     return Response(
         {'message': f'A password change link was sent to {resume.email}.'},
@@ -734,25 +755,22 @@ def confirm_password_change(request):
     token = request.data.get('token')
     new_password = request.data.get('new_password')
 
-    action_payload, err = decode_candidate_action_token(token, 'change_password')
+    resume, err = redeem_candidate_action_token(token, 'change_password')
     if err:
         return err
 
     if not new_password:
         return Response({'error': 'new_password is required.'}, status=status.HTTP_400_BAD_REQUEST)
-    if len(new_password) < 5:
+    if len(new_password) < 8:
         return Response(
-            {'error': 'New password must be at least 5 characters.'},
+            {'error': 'New password must be at least 8 characters.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        resume = models.Resume.objects.get(id=action_payload['user_id'])
-    except models.Resume.DoesNotExist:
-        return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
-
     resume.password = make_password(new_password)
     resume.save(update_fields=['password'])
+
+    _send_account_change_notification_email(resume.email, resume.full_name, 'password')
 
     return Response(
         {'message': 'Your application password was updated. Sign in again to view your status.'},
@@ -780,12 +798,13 @@ def request_email_change_link(request, resume_id):
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    token = generate_candidate_action_token(resume.id, 'change_email')
+    token = generate_candidate_action_token(resume.id, 'change_email', hours=24)
     _send_candidate_account_link_email(
         resume,
         'Change your application email',
         f'application/change-email?token={token}',
         'change your application email',
+        expires_hours=24,
     )
     return Response(
         {'message': f'An email change link was sent to {resume.email}.'},
@@ -801,33 +820,31 @@ def confirm_email_change(request):
     token = request.data.get('token')
     new_email = (request.data.get('new_email') or '').strip().lower()
 
-    action_payload, err = decode_candidate_action_token(token, 'change_email')
+    resume, err = redeem_candidate_action_token(token, 'change_email')
     if err:
         return err
 
     if not new_email:
         return Response({'error': 'new_email is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        resume = models.Resume.objects.get(id=action_payload['user_id'])
-    except models.Resume.DoesNotExist:
-        return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
-
     if resume.email.lower() == new_email:
         return Response({'error': 'That is already your current email address.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if models.Resume.objects.filter(email__iexact=new_email, is_email_verified=True).exclude(id=resume.id).exists():
+    if models.Resume.objects.filter(email__iexact=new_email).exclude(id=resume.id).exists():
         return Response(
-            {'error': 'This email is already used by another verified application.'},
+            {'error': 'This email is already in use by another application.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    old_email = resume.email
+    old_full_name = resume.full_name
     resume.email = new_email
     resume.is_email_verified = False
     resume.verification_token = get_random_string(32)
     resume.save(update_fields=['email', 'is_email_verified', 'verification_token'])
 
     send_verification_email(resume)
+    _send_account_change_notification_email(old_email, old_full_name, 'email address')
 
     return Response(
         {
@@ -1912,21 +1929,26 @@ def assign_live_assessment_appointment(request, freelancer_id):
 class ScreeningResultViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ScreeningResult.objects.all()
     serializer_class = serializers.ScreeningResultSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
 class ScreeningConfigViewSet(viewsets.ModelViewSet):
     queryset = ScreeningConfig.objects.all()
     serializer_class = serializers.ScreeningConfigSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
 class FieldViewSet(viewsets.ModelViewSet):
     queryset = Field.objects.all()
     serializer_class = serializers.FieldSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
 class FullAssessmentViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing FullAssessment objects.
     Provides list, retrieve, create, update, and delete actions.
     """
-    queryset = models.FullAssessment.objects.all()
     serializer_class = serializers.FullAssessmentSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]

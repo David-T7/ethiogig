@@ -8,19 +8,19 @@ app_name = 'project'
 router = DefaultRouter()
 
 # Register viewsets with unique basenames
-router.register('projects', views.ProjectViewSet)
+router.register('projects', views.ProjectViewSet, basename='project')
 router.register('contracts', views.ContractViewSet)
-router.register('disputes', views.DisputeViewSet)
+router.register('disputes', views.DisputeViewSet, basename='dispute')
 router.register('dispute-response', views.DisputeResponseViewSet , basename='dispute-response')
-router.register('milestones', views.MileStoneViewSet)
-router.register('counter-offer', views.CounterOfferView)
+router.register('milestones', views.MileStoneViewSet, basename='milestone')
+router.register('counter-offer', views.CounterOfferView, basename='counter-offer')
 router.register('counter-offer-milestones', views.CounterOfferMileStoneViewSet , basename="counter-offer-milestone")
 router.register('escrows', views.EscrowViewSet, basename='escrow')
 router.register('freelancer-projects', views.FreelancerProjectViewSet , basename='freelancer-projects')
 router.register('freelancer-contracts', views.FreelancerContractListViewSet, basename='freelancer-contract-list-view')
 router.register('counter-offers', views.CounterOfferViewSet , basename='counter-offers')
-router.register('supporting-document', views.SupportingDocumentView),
-router.register('drc-disputes',views.DrcForwardedDisputesViewSet)
+router.register('supporting-document', views.SupportingDocumentView, basename='supporting-document')
+router.register('drc-disputes', views.DrcForwardedDisputesViewSet, basename='drc-dispute')
 router.register('dispute-resolve-drc',views.ResolvedDrcViewSet , basename='dispute-resolve-drc')
 
 

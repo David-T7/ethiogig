@@ -1002,10 +1002,11 @@ class SkillCertificate(models.Model):
 
 
 class CandidateActionToken(models.Model):
-    """One-time token for password/email change magic links."""
+    """One-time opaque token for password/email change magic links."""
     jti = models.UUIDField(default=uuid.uuid4, unique=True)
     resume = models.ForeignKey('Resume', on_delete=models.CASCADE, related_name='action_tokens')
     purpose = models.CharField(max_length=50)
+    expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
     used_at = models.DateTimeField(null=True, blank=True)
 

@@ -45,6 +45,14 @@ class FreelancerSerializer(serializers.ModelSerializer):
 
         return freelancer
 
+class FreelancerPreviewSerializer(serializers.ModelSerializer):
+    """Safe public preview — no contact info, no private fields."""
+    class Meta:
+        model = models.Freelancer
+        fields = ['id', 'full_name', 'professional_title', 'bio', 'skills',
+                  'hourly_rate', 'average_rating', 'profile_picture', 'verified']
+
+
 class InterviewerSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Interviewer

@@ -726,18 +726,28 @@ class RemoveClientView(generics.DestroyAPIView):
         return self.queryset.get(id=self.request.user.id)
 
 class ManageClientListView(generics.ListAPIView):
-    """View for listing clients"""
+    """Admin-only: full client list."""
     queryset = models.Client.objects.all()
     serializer_class = serializers.ClientSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
 class ManageFreelnacerListView(generics.ListAPIView):
-    """View for listing freelancer"""
+    """Admin-only: full freelancer list with all fields."""
     queryset = models.Freelancer.objects.all()
     serializer_class = serializers.FreelancerSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+
+class FreelancerPreviewView(generics.ListAPIView):
+    """Public preview: limited freelancer cards for unauthenticated visitors."""
+    serializer_class = serializers.FreelancerPreviewSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        return models.Freelancer.objects.filter(
+            is_active=True, account_status='active'
+        ).order_by('-average_rating')[:8]
 
 
 
@@ -772,11 +782,13 @@ class ManageProjectListView(generics.ListAPIView):
         return models.Project.objects.filter(client=user)
 
 class ManageProjectDetailView(generics.RetrieveAPIView):
-    """View for retrieving a single project"""
-    queryset = models.Project.objects.all()
+    """View for retrieving a single project — scoped to the requesting user."""
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return models.Project.objects.filter(client=self.request.user)
 
 
 
